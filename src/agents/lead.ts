@@ -248,7 +248,7 @@ async function execute(ctx: HarnessContext, lead: LeadConfig, task: Task, opts: 
     const fresh = db.tasks.get(task.id) ?? task;
     const prompt = opts.resumePrompt ?? (fresh.session_id && fresh.attempts > 1 ? INTERRUPTED_PROMPT : leadTaskPrompt(config, fresh, parentBriefOf(ctx, fresh)));
     const resume = opts.resumePrompt || (fresh.session_id && fresh.attempts > 1) ? fresh.session_id : null;
-    if (["queued", "waiting_human", "review"].includes(fresh.status)) {
+    if (["queued", "waiting_human", "review"].includes(fresh.status) || (opts.resumePrompt && fresh.status === "done")) {
       db.tasks.setStatus(task.id, "running");
       bus.emit({ type: "task.status", task_id: task.id, payload: { status: "running", resumed: !!resume } });
     }
@@ -439,6 +439,13 @@ async function handleInfoAnswer(ctx: HarnessContext, lead: LeadConfig, task: Tas
         db.settings.set(resumeAfterKey(task.id), item.id);
         return;
       }
+      if (!task.session_id) {
+        log.warn(`cannot resume ${task.id} for a change request: no session recorded; re-queuing instead`);
+        db.tasks.setStatus(task.id, "queued");
+        bus.emit({ type: "task.status", task_id: task.id, item_id: item.id, payload: { status: "queued", reason: "change request without a session" } });
+        return;
+      }
+      log.info(`changes requested on completed task ${task.id}; resuming`, { item: item.id });
       await runLeadTask(ctx, lead, task, { resumePrompt: leadResumePrompt(ctx.config, item) });
       return;
     case "retry":
@@ -470,7 +477,8 @@ async function handleAnswer(ctx: HarnessContext, lead: LeadConfig, ev: Event): P
   const task = ctx.db.tasks.get(item.task_id);
   if (!task || task.lead !== lead.id) return;
   const option = item.answer?.option ?? String(ev.payload.option ?? "");
-  if (item.kind === "info" && (option === "retry" || option === "mark_done" || option === "retry_approval")) {
+  // Answers on informational items act on finished tasks too: a change request reopens a completed task.
+  if (item.kind === "info" && (option === "retry" || option === "mark_done" || option === "retry_approval" || option === "request_changes")) {
     await handleInfoAnswer(ctx, lead, task, item, option);
     return;
   }
