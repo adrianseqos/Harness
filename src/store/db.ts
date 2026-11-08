@@ -538,10 +538,11 @@ export class Store {
       const r = this.db.prepare("SELECT * FROM decisions WHERE id = ?").get(id) as Row | undefined;
       return r ? rowToDecision(r) : null;
     },
-    list: (f: { undistilledOnly?: boolean; limit?: number; lead?: string } = {}): Decision[] => {
+    list: (f: { undistilledOnly?: boolean; meaningfulOnly?: boolean; limit?: number; lead?: string } = {}): Decision[] => {
       const where: string[] = [];
       const params: unknown[] = [];
       if (f.undistilledOnly) where.push("distilled = 0");
+      if (f.meaningfulOnly) where.push(MEANINGFUL_SQL);
       if (f.lead) {
         where.push("lead = ?");
         params.push(f.lead);
@@ -566,7 +567,8 @@ export class Store {
       if (!ids.length) return;
       this.db.prepare(`UPDATE decisions SET distilled = 1 WHERE id IN (${ids.map(() => "?").join(",")})`).run(...ids);
     },
-    countUndistilled: (): number => (this.db.prepare("SELECT COUNT(*) AS n FROM decisions WHERE distilled = 0").get() as Row).n as number,
+    countUndistilled: (meaningfulOnly = false): number =>
+      (this.db.prepare(`SELECT COUNT(*) AS n FROM decisions WHERE distilled = 0${meaningfulOnly ? " AND " + MEANINGFUL_SQL : ""}`).get() as Row).n as number,
     /** Agreement between the leads' recommendations and the principal's actual choice. */
     agreementStats: (): { overall: { total: number; agreed: number; rate: number | null }; byLead: Record<string, { total: number; agreed: number; rate: number | null }>; last20: number | null } => {
       const rows = this.db.prepare("SELECT lead, agreed, created_at FROM decisions WHERE agreed IS NOT NULL ORDER BY created_at DESC").all() as Row[];
@@ -722,6 +724,12 @@ export class Store {
     setJson: (key: string, value: unknown): void => this.settings.set(key, JSON.stringify(value)),
   };
 }
+
+/**
+ * Decisions that carry a preference signal. A bare permission answer or a bare "Got it" says nothing
+ * about how the principal thinks, so the brain ignores them unless they come with a comment.
+ */
+const MEANINGFUL_SQL = "NOT ((kind = 'permission' OR (kind = 'info' AND option = 'ack')) AND TRIM(comment) = '')";
 
 export function clampPriority(p: number | undefined | null): number {
   if (p == null || Number.isNaN(Number(p))) return 3;

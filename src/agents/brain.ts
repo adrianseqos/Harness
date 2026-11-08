@@ -75,8 +75,12 @@ export function distillBrain(ctx: HarnessContext, opts: { force?: boolean } = {}
 async function distillOnce(ctx: HarnessContext, force: boolean): Promise<DistillResult> {
   const { db, config } = ctx;
   const log = ctx.log.child("brain");
-  const decisions = db.decisions.list({ undistilledOnly: true, limit: DECISION_BATCH });
-  if (!decisions.length && !force) return { changed: false, reason: "nothing new" };
+  const all = db.decisions.list({ undistilledOnly: true, limit: DECISION_BATCH });
+  const meaningful = new Set(db.decisions.list({ undistilledOnly: true, meaningfulOnly: true, limit: DECISION_BATCH }).map((d) => d.id));
+  const decisions = all.filter((d) => meaningful.has(d.id));
+  const lowSignal = all.filter((d) => !meaningful.has(d.id));
+  if (lowSignal.length) db.decisions.markDistilled(lowSignal.map((d) => d.id));
+  if (!decisions.length && !force) return { changed: false, reason: lowSignal.length ? "only low-signal decisions since the last distillation" : "nothing new" };
 
   const pairs = decisions.map((decision) => ({ decision, item: db.items.get(decision.item_id) }));
   const current = readBrain(config);
@@ -220,7 +224,7 @@ export function startBrainLoop(ctx: HarnessContext): Loop {
 
 function distillIsDue(ctx: HarnessContext): boolean {
   const { db, config } = ctx;
-  const undistilled = db.decisions.countUndistilled();
+  const undistilled = db.decisions.countUndistilled(true);
   if (undistilled >= config.brain.distillEveryDecisions) return true;
   if (undistilled < 1) return false;
   const last = db.settings.get(SETTING_LAST_DISTILL);
@@ -237,7 +241,7 @@ export function brainStats(ctx: HarnessContext): BrainStats {
   const count = db.db.prepare("SELECT COUNT(*) AS n FROM brain_versions").get() as { n: number } | undefined;
   return {
     agreement: db.decisions.agreementStats(),
-    undistilled: db.decisions.countUndistilled(),
+    undistilled: db.decisions.countUndistilled(true),
     versions: count?.n ?? 0,
     lastDistilled: db.settings.get(SETTING_LAST_DISTILL),
     lastChangelog: latest?.notes ?? null,

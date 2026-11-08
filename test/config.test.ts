@@ -22,7 +22,7 @@ test("resolveConfig(EXAMPLE_CONFIG): resolves every path under the root", () => 
   assert.equal(c.paths.brain, path.join(ROOT, "brain"));
   assert.equal(c.paths.brainDoc, path.join(ROOT, "brain", "principal.md"));
   assert.equal(c.paths.inbox, path.join(ROOT, "inbox"));
-  assert.equal(c.paths.web, path.join(ROOT, "web"));
+  assert.ok(c.paths.web.endsWith("/web"), "web dir ships with the package");
   assert.deepEqual(
     c.leads.map((l) => l.id),
     ["product", "engineering", "design", "operations"],

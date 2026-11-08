@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { HarnessConfig, LeadConfig, PermissionPolicy } from "./types.js";
 
@@ -159,9 +160,14 @@ export function resolveConfig(raw: unknown, root: string): HarnessConfig {
       brainDoc: path.join(brainDir, "principal.md"),
       inbox,
       inboxProcessed: path.join(data, "inbox-processed"),
-      web: path.resolve(root, "web"),
+      web: packageWebDir(),
     },
   };
+}
+
+/** The bundled web app ships with the package (next to src/ or dist/), wherever the config lives. */
+export function packageWebDir(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web");
 }
 
 /** Effective permission policy for one lead (global policy + lead extras). */
