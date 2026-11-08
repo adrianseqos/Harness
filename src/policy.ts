@@ -205,7 +205,7 @@ export function mentionsPathOutside(cmd: string, workdir: string): boolean {
   const tokens = cmd
     .split(/\s+/)
     .map((t) => t.replace(/^[<>]+/, "").replace(/^['"]|['"]$/g, ""))
-    .filter((t) => t.startsWith("/") || t.startsWith("~") || t.startsWith("..") || t.includes("/../"));
+    .filter((t) => t.startsWith("/") || t.startsWith("~") || t.startsWith("..") || t.includes("/../") || /^[A-Za-z]:[\\/]/.test(t) || t.startsWith("\\\\"));
   return tokens.some((t) => t.startsWith("~") || !isInside(path.resolve(workdir, t), workdir));
 }
 
