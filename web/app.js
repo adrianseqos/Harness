@@ -63,6 +63,19 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 // ---------------------------------------------------------------- helpers
 
+
+// The server reports open items as { total, byKind, byLead, stale }; older shapes were a plain number.
+function openCount(s) {
+  const q = s?.counts?.queue;
+  if (typeof q === "number") return q;
+  return Number(q?.total ?? 0);
+}
+function setOpenCount(s, n) {
+  if (!s?.counts) return;
+  if (typeof s.counts.queue === "number" || s.counts.queue == null) s.counts.queue = n;
+  else s.counts.queue.total = n;
+}
+
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -147,7 +160,7 @@ function load(key, fallback) {
 }
 
 function setDocumentTitle() {
-  const n = state.state?.counts?.queue ?? 0;
+  const n = openCount(state.state);
   document.title = n > 0 ? `(${n}) Harness` : "Harness";
 }
 
@@ -272,7 +285,7 @@ function renderTopbar() {
   const s = state.state;
   if (!s) return;
   $("#principal-name").textContent = s.principal?.name ? `for ${s.principal.name}` : "";
-  const open = s.counts?.queue ?? 0;
+  const open = openCount(s);
   const badge = $("#open-count");
   badge.textContent = String(open);
   badge.classList.toggle("zero", open === 0);
@@ -798,7 +811,7 @@ async function submitAnswer() {
     const label = (options.find((o) => o.key === option) || {}).label || option;
     scheduleUndo(item.id, label);
     state.queue = state.queue.filter((i) => i.id !== item.id);
-    if (state.state?.counts) state.state.counts.queue = Math.max(0, (state.state.counts.queue ?? 1) - 1);
+    if (state.state?.counts) setOpenCount(state.state, Math.max(0, openCount(state.state) - 1));
     renderTopbar();
     advanceTo(result && result.next ? result.next : null);
   } catch (err) {
