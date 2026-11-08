@@ -1810,10 +1810,11 @@ function connectStream() {
 
 /** After an outage: refetch what is on screen and replay the events missed meanwhile into the activity feed. */
 async function resync() {
+  const since = state.lastEventId; // before the refetch below moves it forward
   await Promise.all([refreshState(), loadTab(state.tab)]);
-  if (!state.lastEventId) return;
+  if (!since) return;
   try {
-    const missed = await get(`/api/events?since=${encodeURIComponent(state.lastEventId)}`);
+    const missed = await get(`/api/events?since=${encodeURIComponent(since)}`);
     const arr = Array.isArray(missed) ? missed : [];
     arr.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
     for (const ev of arr) if (ev && typeof ev === "object" && ev.type) pushActivity(ev);
