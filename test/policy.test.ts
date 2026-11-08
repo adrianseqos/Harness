@@ -180,3 +180,37 @@ test("scanForSecrets: detects added secrets and ignores removed lines and header
   assert.deepEqual(scanForSecrets("+const x = 'nothing to see';"), []);
   assert.equal(scanForSecrets("+ghp_" + "a".repeat(36)).length, 1, "GitHub tokens are caught too");
 });
+
+// --- hardening added after the adversarial review ---
+import { unwrapCommand, mentionsPathOutside } from "../src/policy.js";
+
+test("policy hardening: wrappers, inline code, single &, outside-workspace writes, token file", () => {
+  const W = "/tmp/ws";
+  const v = (tool: string, input: Record<string, unknown>) => evaluate(DEFAULT_PERMISSIONS, tool, input, { workdir: W }).verdict;
+  assert.equal(v("Bash", { command: "timeout 60 git push --force origin main" }), "deny");
+  assert.equal(v("Bash", { command: "env git push origin main" }), "ask");
+  assert.equal(v("Bash", { command: "env FOO=1 npm test" }), "allow");
+  assert.equal(v("Bash", { command: "xargs -a args.txt git push" }), "ask");
+  assert.equal(v("Bash", { command: "node -e \"process.exit()\"" }), "ask");
+  assert.equal(v("Bash", { command: "node script.js" }), "allow");
+  assert.equal(v("Bash", { command: "python3 -c 'print(1)'" }), "ask");
+  assert.equal(v("Bash", { command: "bash -c 'ls'" }), "ask");
+  assert.equal(v("Bash", { command: "ls & git push --force origin main" }), "deny");
+  assert.equal(v("Bash", { command: "cat <(git push origin main)" }), "ask");
+  assert.equal(v("Bash", { command: "echo hi | tee ~/.ssh/authorized_keys" }), "ask");
+  assert.equal(v("Bash", { command: "cat payload > /etc/cron.d/x" }), "ask");
+  assert.equal(v("Bash", { command: "cp -r /home/user/.ssh /tmp/out" }), "ask");
+  assert.equal(v("Bash", { command: "sed -i 's/a/b/' src/x.js" }), "allow");
+  assert.equal(v("Bash", { command: "npm test 2>&1 | tee .harness/evidence/out.txt" }), "allow");
+  assert.equal(v("Bash", { command: "git branch -D develop" }), "ask");
+  assert.equal(v("Bash", { command: "git branch --show-current" }), "allow");
+  assert.equal(v("Bash", { command: "cat data/.harness-token" }), "deny");
+  assert.equal(v("Read", { file_path: "/x/data/.harness-token" }), "deny");
+  assert.equal(v("Write", { file_path: "../../../../etc/passwd" }), "ask");
+  assert.equal(v("Write", { file_path: "src/a.ts" }), "allow");
+  assert.deepEqual(splitShell("ls & git push").map((s) => s.trim()), ["ls", "git push"]);
+  assert.deepEqual(splitShell("a 2>&1 | b").map((s) => s.trim()), ["a 2>&1", "b"]);
+  assert.equal(unwrapCommand("env A=1 timeout -s KILL 30 nice -n 5 git push"), "git push");
+  assert.equal(mentionsPathOutside("tee ../../x", W), true);
+  assert.equal(mentionsPathOutside("tee ./x > out.txt", W), false);
+});

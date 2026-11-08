@@ -75,16 +75,17 @@ export type RawConfig = z.input<typeof ConfigSchema>;
 export const DEFAULT_PERMISSIONS: PermissionPolicy = {
   allow: [
     "Read", "Edit", "Write", "MultiEdit", "Glob", "Grep", "LS", "NotebookEdit", "TodoWrite", "Task", "WebFetch", "WebSearch", "Skill",
-    "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add*)", "Bash(git commit*)", "Bash(git branch*)", "Bash(git checkout*)", "Bash(git switch*)", "Bash(git stash*)", "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git worktree list*)",
-    "Bash(git archive*)", "Bash(git merge-base*)", "Bash(git ls-files*)", "Bash(git blame*)", "Bash(git describe*)", "Bash(git tag*)", "Bash(git mv*)", "Bash(git rm*)", "Bash(git restore*)", "Bash(git cherry-pick*)", "Bash(git apply*)",
-    "Bash(ls*)", "Bash(cat*)", "Bash(head*)", "Bash(tail*)", "Bash(wc*)", "Bash(find*)", "Bash(grep*)", "Bash(rg*)", "Bash(pwd*)", "Bash(echo*)", "Bash(printf*)", "Bash(which*)", "Bash(env*)", "Bash(date*)", "Bash(mkdir*)", "Bash(cp*)", "Bash(mv*)", "Bash(touch*)", "Bash(diff*)", "Bash(sort*)", "Bash(uniq*)", "Bash(tr*)", "Bash(cut*)", "Bash(sed*)", "Bash(awk*)", "Bash(jq*)", "Bash(tree*)", "Bash(tee*)", "Bash(mktemp*)", "Bash(basename*)", "Bash(dirname*)", "Bash(realpath*)", "Bash(stat*)", "Bash(du*)", "Bash(file*)", "Bash(test *)", "Bash([ *)", "Bash(true)", "Bash(false)", "Bash(cd *)", "Bash(export *)", "Bash(tar*)", "Bash(unzip*)", "Bash(zip*)", "Bash(gzip*)", "Bash(gunzip*)", "Bash(timeout*)", "Bash(sleep*)", "Bash(xargs*)", "Bash(sha256sum*)", "Bash(md5sum*)", "Bash(base64 *)",
+    "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git add*)", "Bash(git commit*)", "Bash(git branch)", "Bash(git branch --list*)", "Bash(git branch -a*)", "Bash(git branch -v*)", "Bash(git branch --show-current*)", "Bash(git checkout -- *)", "Bash(git checkout .*)", "Bash(git stash*)", "Bash(git show*)", "Bash(git rev-parse*)", "Bash(git worktree list*)", "Bash(git tag)", "Bash(git tag -l*)", "Bash(git tag --list*)",
+    "Bash(git archive*)", "Bash(git merge-base*)", "Bash(git ls-files*)", "Bash(git blame*)", "Bash(git describe*)", "Bash(git mv*)", "Bash(git rm*)", "Bash(git restore*)", "Bash(git cherry-pick*)", "Bash(git apply*)",
+    "Bash(ls*)", "Bash(cat*)", "Bash(head*)", "Bash(tail*)", "Bash(wc*)", "Bash(find*)", "Bash(grep*)", "Bash(rg*)", "Bash(pwd*)", "Bash(echo*)", "Bash(printf*)", "Bash(which*)", "Bash(date*)", "Bash(mkdir*)", "Bash(cp*)", "Bash(mv*)", "Bash(touch*)", "Bash(diff*)", "Bash(sort*)", "Bash(uniq*)", "Bash(tr*)", "Bash(cut*)", "Bash(sed*)", "Bash(awk*)", "Bash(jq*)", "Bash(tree*)", "Bash(tee*)", "Bash(mktemp*)", "Bash(basename*)", "Bash(dirname*)", "Bash(realpath*)", "Bash(stat*)", "Bash(du*)", "Bash(file*)", "Bash(test *)", "Bash([ *)", "Bash(true)", "Bash(false)", "Bash(cd *)", "Bash(export *)", "Bash(tar*)", "Bash(unzip*)", "Bash(zip*)", "Bash(gzip*)", "Bash(gunzip*)", "Bash(sleep*)", "Bash(sha256sum*)", "Bash(md5sum*)", "Bash(base64 *)",
     "Bash(npm test*)", "Bash(npm run*)", "Bash(npm ci*)", "Bash(npm install*)", "Bash(npx*)", "Bash(pnpm*)", "Bash(yarn*)", "Bash(node*)", "Bash(tsc*)", "Bash(bun*)",
     "Bash(python*)", "Bash(python3*)", "Bash(pytest*)", "Bash(pip*)", "Bash(uv*)", "Bash(poetry*)",
     "Bash(cargo*)", "Bash(go *)", "Bash(make*)", "Bash(gradle*)", "Bash(mvn*)", "Bash(dotnet*)",
     "Bash(prettier*)", "Bash(eslint*)", "Bash(ruff*)", "Bash(black*)",
   ],
   ask: [
-    "Bash(git push*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git reset --hard*)", "Bash(git clean*)",
+    "Bash(git push*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git reset --hard*)", "Bash(git clean*)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git branch -f*)", "Bash(git branch -m*)", "Bash(git branch -M*)", "Bash(git tag -d*)", "Bash(git checkout -b*)", "Bash(git switch*)", "Bash(git worktree add*)", "Bash(git worktree remove*)", "Bash(git config*)",
+    "Bash(env*)", "Bash(printenv*)", "Bash(xargs*)", "Bash(sh *)", "Bash(bash *)", "Bash(zsh *)",
     "Bash(gh pr*)", "Bash(gh release*)",
     "Bash(rm -r*)", "Bash(rm -f*)", "Bash(rm -rf*)",
     "Bash(curl*)", "Bash(wget*)", "Bash(ssh*)", "Bash(scp*)", "Bash(docker*)", "Bash(kubectl*)", "Bash(terraform*)",

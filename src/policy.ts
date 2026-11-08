@@ -81,13 +81,59 @@ export function splitShell(cmd: string): string[] {
       cur = "";
       continue;
     }
+    // A single "&" backgrounds the command on its left and starts a new one (but ">&", "<&", "&>" are redirections).
+    if (c === "&" && cmd[i - 1] !== ">" && cmd[i - 1] !== "<" && cmd[i + 1] !== ">") {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
     cur += c;
   }
   if (cur.trim()) out.push(cur);
   return out.filter((s) => s.trim().length > 0);
 }
 
-const RISKY_SHELL = [/\$\(/, /`/, /\beval\b/, /\bexec\b/, /\bxargs\b\s+rm/, /\bsource\b/, /\bbase64\s+-d/, />\s*\/dev\/sd/, /\bchmod\s+[0-7]*7[0-7]*\s+\//];
+const RISKY_SHELL = [/\$\(/, /`/, /<\(/, />\(/, /^\s*(eval|exec|xargs|source|watch|script)\b/, /^\s*\.\s/, /\bbase64\s+-d/, />\s*\/dev\/sd/, /\bchmod\s+[0-7]*7[0-7]*\s+\//];
+/** Wrappers whose real command is in their arguments: evaluate what they run, not the wrapper. */
+const WRAPPERS = new Set(["env", "timeout", "nice", "nohup", "time", "command", "builtin", "stdbuf", "ionice", "caffeinate"]);
+/** `node -e`, `python -c` and friends execute arbitrary code: never covered by the interpreter's allow rule. */
+const INLINE_CODE: Record<string, RegExp> = {
+  node: /(^|\s)(-e|--eval|-p|--print|--input-type)(\s|=|$)/,
+  bun: /(^|\s)(-e|--eval|-p|--print)(\s|=|$)/,
+  deno: /(^|\s)(eval)(\s|$)/,
+  python: /(^|\s)-c(\s|$)/,
+  python3: /(^|\s)-c(\s|$)/,
+  ruby: /(^|\s)-e(\s|$)/,
+  perl: /(^|\s)-[eE](\s|$)/,
+  php: /(^|\s)-r(\s|$)/,
+  sh: /.*/,
+  bash: /.*/,
+  zsh: /.*/,
+  dash: /.*/,
+  fish: /.*/,
+};
+/** Commands that write to the paths they are given; their path arguments must stay inside the workspace. */
+const WRITING_COMMANDS = new Set(["tee", "cp", "mv", "sed", "touch", "mkdir", "chmod", "chown", "ln", "rsync", "install", "truncate", "dd", "rm", "rmdir", "unzip", "tar", "zip", "gzip", "gunzip", "patch", "git"]);
+/** The API token file must never be read by an agent. */
+const TOKEN_FILE_MARK = ".harness-token";
+
+/** Strip wrappers such as `env FOO=1 timeout 30 <cmd>` down to `<cmd>`; returns null if nothing is left. */
+export function unwrapCommand(cmd: string): string {
+  let tokens = cmd.trim().split(/\s+/);
+  for (let guard = 0; guard < 6 && tokens.length; guard++) {
+    const head = tokens[0];
+    if (!WRAPPERS.has(head)) break;
+    tokens = tokens.slice(1);
+    if (head === "env") while (tokens.length && (tokens[0].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]))) tokens = tokens.slice(1);
+    else if (head === "timeout") {
+      while (tokens.length && tokens[0].startsWith("-")) tokens = tokens.slice(tokens[0] === "-s" || tokens[0] === "-k" ? 2 : 1);
+      tokens = tokens.slice(1); // the duration
+    } else {
+      while (tokens.length && tokens[0].startsWith("-")) tokens = tokens.slice(/^-(n|c|p|k|s)$/.test(tokens[0]) ? 2 : 1);
+    }
+  }
+  return tokens.join(" ");
+}
 
 /**
  * Evaluate a tool call against the policy.
@@ -109,18 +155,39 @@ export function evaluate(policy: PermissionPolicy, toolName: string, input: Reco
       return worst;
     }
   }
+  if (toolName === "Bash") {
+    const raw = subjectOf("Bash", input) ?? "";
+    if (raw.includes(TOKEN_FILE_MARK)) return { verdict: "deny", reason: "the harness token file is off limits" };
+    for (const re of RISKY_SHELL) if (re.test(raw)) return { verdict: "ask", reason: "command uses shell constructs that need a human look" };
+    const unwrapped = unwrapCommand(raw);
+    if (unwrapped && unwrapped !== raw.trim()) {
+      // `env X=1 git push`, `timeout 30 rm -rf /`: judge the wrapped command on its own.
+      return evaluate(policy, "Bash", { ...input, command: unwrapped }, opts);
+    }
+  }
+
   for (const r of policy.deny) if (ruleMatches(r, toolName, input)) return { verdict: "deny", reason: `blocked by policy rule ${r}` };
   for (const r of policy.ask) if (ruleMatches(r, toolName, input)) return { verdict: "ask", reason: `policy rule ${r} requires approval` };
 
   if (toolName === "Bash") {
-    const cmd = subjectOf("Bash", input) ?? "";
-    for (const re of RISKY_SHELL) if (re.test(cmd)) return { verdict: "ask", reason: "command uses shell constructs that need a human look" };
-    if (opts.workdir && /\brm\b/.test(cmd) && mentionsPathOutside(cmd, opts.workdir)) return { verdict: "ask", reason: "rm targets a path outside the workspace" };
+    const cmd = (subjectOf("Bash", input) ?? "").trim();
+    const head = cmd.split(/\s+/)[0] ?? "";
+    const inline = INLINE_CODE[head];
+    if (inline && inline.test(cmd)) return { verdict: "ask", reason: `inline code passed to ${head} needs a human look` };
+    if (opts.workdir) {
+      const writes = WRITING_COMMANDS.has(head) || /(^|[^<>])>{1,2}\s*\S/.test(cmd);
+      if (writes && mentionsPathOutside(cmd, opts.workdir)) return { verdict: "ask", reason: "writes to a path outside the workspace" };
+    }
+  }
+
+  if (toolName === "Read" || toolName === "Glob" || toolName === "Grep") {
+    const p = subjectOf(toolName, input) ?? "";
+    if (p.includes(TOKEN_FILE_MARK)) return { verdict: "deny", reason: "the harness token file is off limits" };
   }
 
   if (opts.workdir && (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit" || toolName === "NotebookEdit")) {
     const p = subjectOf(toolName, input);
-    if (p && path.isAbsolute(p) && !isInside(p, opts.workdir)) return { verdict: "ask", reason: `writes outside the workspace (${p})` };
+    if (p && !isInside(path.resolve(opts.workdir, p), opts.workdir)) return { verdict: "ask", reason: `writes outside the workspace (${p})` };
   }
 
   const allowed = [...policy.allow, ...(opts.extraAllowed ?? [])];
@@ -133,9 +200,13 @@ export function isInside(file: string, dir: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function mentionsPathOutside(cmd: string, workdir: string): boolean {
-  const tokens = cmd.split(/\s+/).filter((t) => t.startsWith("/") || t.startsWith("~") || t.startsWith(".."));
-  return tokens.some((t) => t.startsWith("~") || t.startsWith("..") || !isInside(t, workdir));
+/** True when any path-like token (including redirection targets) points outside the workspace. */
+export function mentionsPathOutside(cmd: string, workdir: string): boolean {
+  const tokens = cmd
+    .split(/\s+/)
+    .map((t) => t.replace(/^[<>]+/, "").replace(/^['"]|['"]$/g, ""))
+    .filter((t) => t.startsWith("/") || t.startsWith("~") || t.startsWith("..") || t.includes("/../"));
+  return tokens.some((t) => t.startsWith("~") || !isInside(path.resolve(workdir, t), workdir));
 }
 
 /** Summarise a tool call for a human: "Bash: git push origin main". */
