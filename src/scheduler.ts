@@ -119,8 +119,8 @@ export async function startHarness(config: HarnessConfig): Promise<RunningHarnes
   const stop = () =>
     (stopping ??= (async () => {
       log.info("stopping harness");
-      await Promise.allSettled(loops.map((l) => l.stop().catch((err) => log.error(`loop ${l.name} failed to stop`, { err }))));
-      await server.close().catch((err) => log.error("server failed to close", { err }));
+      await Promise.allSettled(loops.map((l) => l.stop().catch((err: unknown) => log.error(`loop ${l.name} failed to stop`, { err }))));
+      await server.close().catch((err: unknown) => log.error("server failed to close", { err }));
       ctx.db.close();
       log.info("harness stopped");
     })());
