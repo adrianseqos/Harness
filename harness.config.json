@@ -1,0 +1,46 @@
+{
+  "principal": { "name": "Adrian", "timezone": "Europe/Berlin", "language": "en" },
+  "server": { "host": "127.0.0.1", "port": 4242 },
+  "models": { "chief": "claude-opus-5-5", "lead": "claude-opus-5-5", "subagent": "claude-sonnet-5-5", "brain": "claude-opus-5-5" },
+  "budget": { "perTaskUsd": 10, "perDayUsd": 100 },
+  "chief": { "intervalSec": 60, "dailyBriefHour": 8 },
+  "brain": { "distillEveryDecisions": 5, "distillIntervalMin": 360 },
+  "review": { "staleAfterHours": 24, "permissionWaitMin": 10, "leadPollSec": 15, "maxTurns": 300 },
+  "leads": [
+    {
+      "id": "product",
+      "name": "Product Lead",
+      "charter": "Owns what we build and why: turns raw asks into crisp specs with acceptance criteria, proposes scope cuts, writes user-facing docs and release notes, and keeps a short roadmap. Produces documents, not code.",
+      "repos": [],
+      "concurrency": 1,
+      "onApprove": "none"
+    },
+    {
+      "id": "engineering",
+      "name": "Engineering Lead",
+      "charter": "Owns the codebases listed in repos: implements features and fixes on a branch, with tests, a security review and screenshots or a short recording for anything user-visible. Keeps changes small and reviewable.",
+      "repos": [],
+      "concurrency": 1,
+      "onApprove": "pr"
+    },
+    {
+      "id": "design",
+      "name": "Design Lead",
+      "charter": "Owns how things look and feel: UX flows, copy, visual consistency, accessibility. Produces mockups as HTML, annotated screenshots and concrete change proposals for engineering.",
+      "repos": [],
+      "concurrency": 1,
+      "onApprove": "none"
+    },
+    {
+      "id": "operations",
+      "name": "Operations Lead",
+      "charter": "Owns everything that keeps the business running: research, analyses, process documents, checklists, drafts of emails and memos, data clean-ups. Produces finished artefacts the principal can send or file as-is.",
+      "repos": [],
+      "concurrency": 2,
+      "onApprove": "none"
+    }
+  ],
+  "permissions": { "allow": [], "ask": [], "deny": [] },
+  "mcpServers": {},
+  "paths": { "data": "data", "brain": "brain", "inbox": "inbox" }
+}

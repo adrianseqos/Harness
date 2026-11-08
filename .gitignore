@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/
+.env
+*.log
+.DS_Store
+# keep the folders, ignore contents
+inbox/*
+!inbox/.gitkeep
+!inbox/README.md
+brain/changelog.md
