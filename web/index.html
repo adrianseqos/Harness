@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Harness</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232563eb'/%3E%3Cpath d='M4 3v10M12 3v10M4 8h8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar" role="banner">
+    <div class="topbar-left">
+      <span class="brand">Harness</span>
+      <span class="principal" id="principal-name" title="Principal"></span>
+      <span class="badge badge-open" id="open-count" title="Open queue items" aria-label="Open queue items">0</span>
+      <span class="badge badge-paused hidden" id="paused-indicator" role="status">Paused</span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" data-tab="queue" aria-selected="true" title="Queue (g q)">Queue</button>
+      <button class="tab" role="tab" data-tab="tasks" aria-selected="false" title="Tasks (g t)">Tasks</button>
+      <button class="tab" role="tab" data-tab="agents" aria-selected="false" title="Agents (g a)">Agents</button>
+      <button class="tab" role="tab" data-tab="brain" aria-selected="false" title="Brain (g b)">Brain</button>
+      <button class="tab" role="tab" data-tab="ideas" aria-selected="false" title="Ideas (g i)">Ideas</button>
+      <button class="tab" role="tab" data-tab="activity" aria-selected="false" title="Activity (g l)">Activity</button>
+    </nav>
+    <div class="topbar-right">
+      <span class="spend" id="spend" title="Spend today vs daily cap">$0.00 / $0</span>
+      <button class="btn btn-ghost" id="pause-toggle" type="button" title="Pause or resume every agent">Pause</button>
+      <button class="btn btn-primary" id="new-task-btn" type="button" title="New task (n or Ctrl/Cmd+K)">New task</button>
+      <button class="btn btn-ghost btn-icon" id="help-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    </div>
+  </header>
+
+  <div class="offline-banner hidden" id="offline-banner" role="status">Live updates are unavailable. Refreshing every 30 seconds instead.</div>
+
+  <main id="main" class="main">
+
+    <!-- Queue -->
+    <section class="panel panel-queue" id="panel-queue" role="tabpanel" aria-label="Queue">
+      <div class="queue-list-pane">
+        <div class="filters" role="group" aria-label="Filters">
+          <label class="filter">
+            <span class="sr-only">Kind</span>
+            <select id="filter-kind" aria-label="Filter by kind">
+              <option value="">All kinds</option>
+              <option value="permission">Permission</option>
+              <option value="review">Review</option>
+              <option value="decision">Decision</option>
+              <option value="question">Question</option>
+              <option value="idea">Idea</option>
+              <option value="info">Info</option>
+            </select>
+          </label>
+          <label class="filter">
+            <span class="sr-only">Lead</span>
+            <select id="filter-lead" aria-label="Filter by lead">
+              <option value="">All leads</option>
+            </select>
+          </label>
+          <span class="filter-count" id="queue-count"></span>
+        </div>
+        <ul class="queue-list" id="queue-list" role="listbox" aria-label="Open queue items" tabindex="0"></ul>
+      </div>
+      <div class="queue-detail-pane" id="queue-detail" aria-live="polite">
+        <div class="empty">Nothing selected.</div>
+      </div>
+    </section>
+
+    <!-- Tasks -->
+    <section class="panel panel-tasks hidden" id="panel-tasks" role="tabpanel" aria-label="Tasks">
+      <div class="board" id="task-board"></div>
+    </section>
+
+    <!-- Agents -->
+    <section class="panel panel-agents hidden" id="panel-agents" role="tabpanel" aria-label="Agents">
+      <div class="agents-grid" id="agents-grid"></div>
+    </section>
+
+    <!-- Brain -->
+    <section class="panel panel-brain hidden" id="panel-brain" role="tabpanel" aria-label="Principal brain">
+      <div class="brain-left">
+        <div class="brain-toolbar">
+          <h2 class="h2" id="brain-title">Principal brain</h2>
+          <span class="muted" id="brain-version-note"></span>
+          <button class="btn btn-ghost hidden" id="brain-back-current" type="button">Back to current</button>
+        </div>
+        <article class="markdown brain-doc" id="brain-doc"></article>
+      </div>
+      <div class="brain-right">
+        <div class="brain-stats" id="brain-stats"></div>
+        <div class="brain-actions">
+          <button class="btn" id="brain-distill" type="button" title="Rewrite the brain from undistilled decisions">Distill now</button>
+        </div>
+        <div class="brain-editor">
+          <label class="label" for="brain-editor">Edit the document</label>
+          <textarea id="brain-editor" spellcheck="true" aria-label="Brain document editor"></textarea>
+          <div class="row">
+            <button class="btn btn-primary" id="brain-save" type="button">Save</button>
+            <span class="muted" id="brain-dirty"></span>
+          </div>
+        </div>
+        <div class="brain-versions">
+          <h3 class="h3">Versions</h3>
+          <ul class="plain-list" id="brain-versions"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ideas -->
+    <section class="panel panel-ideas hidden" id="panel-ideas" role="tabpanel" aria-label="Ideas">
+      <ul class="plain-list ideas-list" id="ideas-list"></ul>
+    </section>
+
+    <!-- Activity -->
+    <section class="panel panel-activity hidden" id="panel-activity" role="tabpanel" aria-label="Activity">
+      <ul class="plain-list activity-list" id="activity-list"></ul>
+    </section>
+  </main>
+
+  <!-- Task drawer -->
+  <div class="drawer-backdrop hidden" id="task-drawer-backdrop"></div>
+  <aside class="drawer hidden" id="task-drawer" role="dialog" aria-modal="true" aria-labelledby="task-drawer-title">
+    <div class="drawer-head">
+      <h2 class="h2" id="task-drawer-title">Task</h2>
+      <button class="btn btn-ghost btn-icon" id="task-drawer-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div class="drawer-body" id="task-drawer-body"></div>
+  </aside>
+
+  <!-- New task modal -->
+  <div class="modal-backdrop hidden" id="new-task-modal">
+    <form class="modal" id="new-task-form" role="dialog" aria-modal="true" aria-labelledby="new-task-title">
+      <div class="modal-head">
+        <h2 class="h2" id="new-task-title">New task</h2>
+        <button class="btn btn-ghost btn-icon" type="button" id="new-task-close" aria-label="Close">×</button>
+      </div>
+      <label class="label" for="nt-title">Title</label>
+      <input id="nt-title" name="title" type="text" required autocomplete="off" placeholder="What should get done?" />
+      <label class="label" for="nt-brief">Brief <span class="muted">(markdown, optional)</span></label>
+      <textarea id="nt-brief" name="brief" rows="6" placeholder="Context, constraints, what good looks like."></textarea>
+      <div class="row row-wrap">
+        <label class="label-inline">Lead
+          <select id="nt-lead" name="lead">
+            <option value="">Let the chief decide</option>
+          </select>
+        </label>
+        <label class="label-inline">Priority
+          <select id="nt-priority" name="priority">
+            <option value="1">1 · urgent</option>
+            <option value="2">2 · high</option>
+            <option value="3" selected>3 · normal</option>
+            <option value="4">4 · low</option>
+            <option value="5">5 · someday</option>
+          </select>
+        </label>
+        <label class="label-inline hidden" id="nt-repo-label">Repo
+          <select id="nt-repo" name="repo"></select>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <span class="muted">Ctrl/Cmd+Enter to create</span>
+        <button class="btn btn-primary" type="submit" id="nt-submit">Create task</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Help overlay -->
+  <div class="modal-backdrop hidden" id="help-overlay">
+    <div class="modal modal-help" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="modal-head">
+        <h2 class="h2" id="help-title">Keyboard shortcuts</h2>
+        <button class="btn btn-ghost btn-icon" type="button" id="help-close" aria-label="Close">×</button>
+      </div>
+      <div class="help-grid">
+        <div>
+          <h3 class="h3">Queue</h3>
+          <dl class="keys">
+            <dt><kbd>j</kbd> <kbd>k</kbd> / <kbd>↓</kbd> <kbd>↑</kbd></dt><dd>Move selection</dd>
+            <dt><kbd>Enter</kbd></dt><dd>Open or focus the item</dd>
+            <dt><kbd>1</kbd>…<kbd>9</kbd></dt><dd>Choose option</dd>
+            <dt><kbd>a</kbd></dt><dd>Recommended option (or approve)</dd>
+            <dt><kbd>r</kbd></dt><dd>Request changes / answer</dd>
+            <dt><kbd>x</kbd></dt><dd>Reject, deny or discard</dd>
+            <dt><kbd>d</kbd></dt><dd>Defer 24 hours</dd>
+            <dt><kbd>s</kbd></dt><dd>Skip to the next item</dd>
+            <dt><kbd>c</kbd></dt><dd>Focus the comment</dd>
+            <dt><kbd>v</kbd></dt><dd>Toggle voice input</dd>
+            <dt><kbd>u</kbd></dt><dd>Undo the last answer</dd>
+            <dt><kbd>Ctrl/Cmd</kbd>+<kbd>Enter</kbd></dt><dd>Submit from the comment box</dd>
+          </dl>
+        </div>
+        <div>
+          <h3 class="h3">Everywhere</h3>
+          <dl class="keys">
+            <dt><kbd>n</kbd> / <kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd></dt><dd>New task</dd>
+            <dt><kbd>g</kbd> then <kbd>q</kbd></dt><dd>Queue</dd>
+            <dt><kbd>g</kbd> then <kbd>t</kbd></dt><dd>Tasks</dd>
+            <dt><kbd>g</kbd> then <kbd>a</kbd></dt><dd>Agents</dd>
+            <dt><kbd>g</kbd> then <kbd>b</kbd></dt><dd>Brain</dd>
+            <dt><kbd>g</kbd> then <kbd>i</kbd></dt><dd>Ideas</dd>
+            <dt><kbd>g</kbd> then <kbd>l</kbd></dt><dd>Activity</dd>
+            <dt><kbd>?</kbd></dt><dd>This help</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Close overlays</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button class="btn btn-ghost btn-icon lightbox-close" type="button" id="lightbox-close" aria-label="Close">×</button>
+    <img id="lightbox-img" alt="" />
+    <div class="lightbox-caption" id="lightbox-caption"></div>
+  </div>
+
+  <!-- Toasts -->
+  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/vendor/marked.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
