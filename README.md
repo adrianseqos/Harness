@@ -154,6 +154,7 @@ Task statuses: `inbox` → `queued` → `running` → (`waiting_human`) → `rev
 | `review.maxTurns` | `300` | Turn cap per lead session |
 | `permissions.allow` / `ask` / `deny` | `[]` | Extra rules merged on top of the built-in policy |
 | `mcpServers` | `{}` | MCP servers (stdio) available to every lead |
+| `agentEnv` | `[]` | Extra environment variable names passed to agent sessions (everything else from your environment is withheld) |
 | `paths.data` / `brain` / `inbox` | `data` / `brain` / `inbox` | Relative to the config file or absolute |
 
 Each entry in `leads`:
@@ -182,7 +183,7 @@ Rules use Claude Code's syntax: a bare tool name (`Read`, `WebFetch`) or `Tool(p
 }
 ```
 
-Evaluation order is `deny` > `ask` > `allow`; anything unmatched asks. Compound commands (`a && b`, `a; b`, `a | b`) are judged by their worst part, so `git status && rm -rf /` asks. Command substitution, backticks, `eval`, `source` and `base64 -d` always ask. Writes outside the task workspace and `rm` of paths outside it ask. The built-in policy allows the usual read, edit, git-local, build and test commands, asks for `git push`, `gh pr`, `rm -r`, `curl`, `docker`, package publishing and the like, and denies `sudo`, `git push --force`, `mkfs`, `dd`, `shutdown`. See `DEFAULT_PERMISSIONS` in `src/config.ts` for the full list.
+Evaluation order is `deny` > `ask` > `allow`; anything unmatched asks. Compound commands (`a && b`, `a; b`, `a | b`, `a & b`) are judged by their worst part, so `git status && rm -rf /` asks. Wrappers such as `env`, `timeout` and `nice` are unwrapped and the real command is judged. Command substitution, process substitution, backticks, `eval`, `source`, `xargs`, shells (`bash -c`) and inline code (`node -e`, `python -c`) always ask. Writing commands (`tee`, `cp`, `mv`, `sed -i`, `rm`, redirections, …) that target paths outside the task workspace ask, as do `Write`/`Edit` calls outside it. "Allow for this task" grants the narrowest rule that covers the call (for example `Bash(git push origin*)`) and is checked per shell segment. The built-in policy allows the usual read, edit, git-local, build and test commands, asks for `git push`, `gh pr`, `rm -r`, `curl`, `docker`, package publishing and the like, and denies `sudo`, `git push --force`, `mkfs`, `dd`, `shutdown`. See `DEFAULT_PERMISSIONS` in `src/config.ts` for the full list.
 
 When you answer a permission with `allow_always`, the harness derives a rule from the call (`Bash(git push*)`, `Write(/that/dir/*)`) and adds it for the rest of that task only.
 
@@ -234,7 +235,10 @@ Connect the leads to your systems through `mcpServers` (CRM, data room, email dr
 - **Isolated workspaces.** Leads work in their own worktree and branch; file writes and `rm` outside it ask. Your main checkout is only touched by an approved merge, and only when it is clean.
 - **Security review and secrets scan.** Leads must run the `security` sub-agent on their diff before submitting; the harness additionally scans every added line of the diff for API keys, tokens, private keys and password assignments and blocks the submission if it finds any.
 - **Cost caps.** `budget.perTaskUsd` stops a runaway session; `budget.perDayUsd` pauses the whole organisation until the next day (you get an info item). Spend is visible per task, per lead and per day.
-- **Local only.** The web app binds to `127.0.0.1` and has no authentication; do not expose the port. Everything (database, attachments, workspaces, logs, transcripts) stays in `data/`.
+- **Local only, token-protected.** The web app binds to `127.0.0.1`. Every API and attachment request needs the per-installation token in `data/.harness-token`: the browser gets it as a cookie when it opens the app, the CLI reads the file, and requests with a foreign `Host` header are refused. Agents cannot read the token file (the policy denies it) and cannot answer their own queue items. Everything (database, attachments, workspaces, logs, transcripts) stays in `data/`.
+- **Agents see a minimal environment.** Sessions receive `PATH`, `HOME`, proxy and Claude auth variables only, never the rest of your `.env`. Add names to `agentEnv` in the config when a lead genuinely needs one.
+- **Worktree settings are never loaded.** A repository's `.claude/settings.json` and hooks cannot widen a lead's permissions; its `CLAUDE.md` is injected as read-only guidance.
+- **Approvals apply to what you reviewed.** If a branch gained commits after the review package was built, the approval is refused and you can ask for a new review.
 - **Pause.** The Pause button (or `npm run harness -- pause`) stops every loop from starting new work; running sessions finish their current turn. Resume with the button or `npm run harness -- resume`.
 
 ## Operating
@@ -277,6 +281,8 @@ brain/changelog.md      what each distillation changed and why
 | Voice input does nothing | Your browser lacks speech recognition or the microphone permission was refused. Chrome, Edge and Safari work. |
 
 Logs: `data/logs/harness.log` for the harness, `data/logs/<run>.jsonl` for what an agent actually did (also under Agents → run → transcript).
+
+**`401 Missing or invalid harness token` from curl or a script.** Send the token from `data/.harness-token` in the `x-harness-token` header, e.g. `curl -H "x-harness-token: $(cat data/.harness-token)" http://127.0.0.1:4242/api/queue`. The browser and the CLI do this for you.
 
 ## Roadmap and extension points
 
