@@ -382,7 +382,7 @@ async function mergeBranch(task: Task): Promise<ApprovalResult> {
   const repo = task.repo;
   const branch = task.branch!;
   if (!repo || !(await isGitRepo(repo))) return { ok: false, message: `Repository ${repo ?? "(unknown)"} is missing; merge manually: git merge ${branch}` };
-  const dirty = (await git(repo, ["status", "--porcelain"])).stdout.trim();
+  const dirty = (await git(repo, ["status", "--porcelain", "--untracked-files=no"])).stdout.trim();
   if (dirty) return { ok: false, message: `Repo has uncommitted changes; merge manually: git merge ${branch}` };
   const identity = (await gitOk(repo, ["config", "user.email"])) ? [] : HARNESS_IDENTITY;
   try {

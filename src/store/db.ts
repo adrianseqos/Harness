@@ -489,7 +489,7 @@ export class Store {
         if (!item || item.status !== "open") return null;
         const ts = nowIso();
         this.db.prepare("UPDATE queue_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(JSON.stringify({ option, comment }), ts, id);
-        const agreed = item.recommended ? (item.recommended === option ? 1 : 0) : null;
+        const agreed = item.recommended ? (item.recommended === option || (item.kind === "permission" && item.recommended === "allow" && option === "allow_always") ? 1 : 0) : null;
         const did = newId("dec");
         this.db
           .prepare(

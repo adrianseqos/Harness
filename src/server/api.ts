@@ -363,9 +363,10 @@ function getTask(ctx: HarnessContext, req: ApiRequest): ApiResponse {
 
 function cancelTask(ctx: HarnessContext, req: ApiRequest): ApiResponse {
   const task = requireTask(ctx, req.params.id);
-  const cancelledRuns = ctx.runner.cancelTask(task.id);
+  // Final status first, then abort the run: the lead loop leaves a task alone once it is no longer "running".
   let updated = task;
   if (task.status !== "done") updated = ctx.db.tasks.setStatus(task.id, "rejected", { result_summary: "cancelled by principal" }) ?? task;
+  const cancelledRuns = ctx.runner.cancelTask(task.id);
   const withdrawn = ctx.db.items.withdrawForTask(task.id, "task cancelled");
   ctx.bus.emit({ type: "task.cancelled", task_id: task.id, payload: { previous: task.status, runs: cancelledRuns, withdrawn } });
   ctx.log.info("task cancelled", { task: task.id, runs: cancelledRuns, withdrawn });
