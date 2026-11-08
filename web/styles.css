@@ -27,6 +27,12 @@
   --p3: #ca8a04;
   --p4: #2563eb;
   --p5: #6b7280;
+  /* Badge text per priority: dark text on the light orange/yellow, white on the rest (all >= 4.5:1). */
+  --p1-fg: #ffffff;
+  --p2-fg: #111111;
+  --p3-fg: #111111;
+  --p4-fg: #ffffff;
+  --p5-fg: #ffffff;
 
   --diff-add-bg: #e6f5ea;
   --diff-add-fg: #14532d;
@@ -70,6 +76,12 @@
     --p3: #facc15;
     --p4: #60a5fa;
     --p5: #9ca3af;
+    /* Dark-mode badge colours are pastel: dark text everywhere (white would be 1.5–2.6:1). */
+    --p1-fg: #111111;
+    --p2-fg: #111111;
+    --p3-fg: #111111;
+    --p4-fg: #111111;
+    --p5-fg: #111111;
 
     --diff-add-bg: #12301c;
     --diff-add-fg: #bbf7d0;
@@ -214,7 +226,7 @@ textarea { resize: vertical; min-height: 64px; font-family: inherit; }
 .kind-idea { color: var(--kind-idea); } .bar-idea { background: var(--kind-idea); }
 .kind-info { color: var(--kind-info); } .bar-info { background: var(--kind-info); }
 .prio { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; color: #fff; line-height: 16px; }
-.prio-1 { background: var(--p1); } .prio-2 { background: var(--p2); } .prio-3 { background: var(--p3); } .prio-4 { background: var(--p4); } .prio-5 { background: var(--p5); }
+.prio-1 { background: var(--p1); color: var(--p1-fg); } .prio-2 { background: var(--p2); color: var(--p2-fg); } .prio-3 { background: var(--p3); color: var(--p3-fg); } .prio-4 { background: var(--p4); color: var(--p4-fg); } .prio-5 { background: var(--p5); color: var(--p5-fg); }
 .blocking { color: var(--danger); font-weight: 700; font-size: 10px; letter-spacing: 0.04em; }
 
 .queue-detail-pane { overflow: auto; padding: 16px 20px 12px; }

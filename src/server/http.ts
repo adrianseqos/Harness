@@ -77,6 +77,22 @@ function hostAllowed(hostHeader: string | undefined, boundHost: string, boundPor
   return local.has(name);
 }
 
+/**
+ * Reject API calls whose Origin header names another site (defence in depth on top of the SameSite=Strict cookie).
+ * Requests without an Origin (same-origin GETs, the CLI, curl) pass; a present Origin must be http://<this host>:<port>.
+ */
+function originAllowed(origin: string | undefined, boundHost: string, boundPort: number): boolean {
+  if (origin === undefined) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false; // "null" (opaque origin) or garbage
+  }
+  if (parsed.protocol !== "http:") return false;
+  return hostAllowed(parsed.host, boundHost, boundPort);
+}
+
 export interface ServerHandle {
   close(): Promise<void>;
   port: number;
@@ -253,6 +269,10 @@ export async function startServer(ctx: HarnessContext): Promise<ServerHandle> {
     try {
       if (!hostAllowed(req.headers.host, host, boundPort)) {
         sendJson(res, 403, { error: "Host header does not match this server" });
+        return;
+      }
+      if (url.pathname.startsWith("/api/") && !originAllowed(req.headers.origin, host, boundPort)) {
+        sendJson(res, 403, { error: "Origin header does not match this server" });
         return;
       }
       if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/attachments/")) {

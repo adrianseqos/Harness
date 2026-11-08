@@ -55,6 +55,8 @@ const state = {
   pendingChord: null, // "g" chord
   polling: null,
   sseErrors: 0,
+  streamLost: false, // the SSE connection dropped; resync once it is back
+  lastEventId: 0, // highest event id seen (SSE or activity list), for /api/events?since=
   micShown: false,
 };
 
@@ -189,7 +191,27 @@ const post = (path, body) => api("POST", path, body ?? {});
 
 // ---------------------------------------------------------------- markdown
 
-const BLOCKED_TAGS = new Set(["SCRIPT", "IFRAME", "OBJECT", "EMBED", "STYLE", "LINK", "META", "BASE", "FORM"]);
+// Compared against localName.toUpperCase(), so lower-case names inside <svg>/<math> match too. Foreign-namespace
+// elements (svg, math) are dropped outright: they are not needed for agent markdown and hide styling/script vectors.
+const BLOCKED_TAGS = new Set(["SCRIPT", "IFRAME", "OBJECT", "EMBED", "STYLE", "LINK", "META", "BASE", "FORM", "SVG", "MATH"]);
+const URL_ATTRS = new Set(["href", "src", "xlink:href", "action", "formaction", "poster", "srcset", "data", "ping", "background", "cite", "longdesc", "usemap"]);
+const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+const XHTML_NS = "http://www.w3.org/1999/xhtml";
+
+/** True for http(s)/mailto URLs, relative paths and #anchors; rejects javascript:, data:, vbscript: and friends. */
+function safeUrl(value) {
+  // The parser already decoded entities ("java&#9;script:" is now "java<TAB>script:"); browsers ignore whitespace and
+  // control characters inside a scheme, so strip them before looking at it.
+  const v = String(value).replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, "").toLowerCase();
+  if (v === "" || v.startsWith("#")) return true;
+  let parsed;
+  try {
+    parsed = new URL(v, document.baseURI);
+  } catch {
+    return false;
+  }
+  return SAFE_SCHEMES.has(parsed.protocol);
+}
 
 /** Render markdown to sanitised HTML: no scripts, frames or inline handlers survive. */
 function renderMarkdown(src) {
@@ -213,18 +235,19 @@ function renderMarkdown(src) {
 function sanitise(html) {
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
   for (const node of Array.from(doc.body.querySelectorAll("*"))) {
-    if (BLOCKED_TAGS.has(node.tagName)) {
+    if (!node.isConnected) continue; // inside a subtree removed below
+    const tag = String(node.localName || node.tagName || "").toUpperCase();
+    if (BLOCKED_TAGS.has(tag) || node.namespaceURI !== XHTML_NS) {
       node.remove();
       continue;
     }
     for (const attr of Array.from(node.attributes)) {
       const name = attr.name.toLowerCase();
-      const value = attr.value.trim().toLowerCase();
-      if (name.startsWith("on") || ((name === "href" || name === "src" || name === "xlink:href") && value.startsWith("javascript:"))) {
+      if (name.startsWith("on") || name === "style" || (URL_ATTRS.has(name) && !safeUrl(attr.value))) {
         node.removeAttribute(attr.name);
       }
     }
-    if (node.tagName === "A") {
+    if (tag === "A") {
       node.setAttribute("target", "_blank");
       node.setAttribute("rel", "noopener noreferrer");
     }
@@ -337,7 +360,17 @@ function switchTab(tab, { focus = false } = {}) {
   for (const b of $$(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   for (const t of TABS) $(`#panel-${t}`).classList.toggle("hidden", t !== tab);
   if (focus) $(`.tab[data-tab="${tab}"]`).focus();
-  void loadTab(tab);
+  return loadTab(tab);
+}
+
+/** Switch to the queue and show one specific item, even if the list refresh would have picked another. */
+async function showQueueItem(id) {
+  state.selectedId = id;
+  await switchTab("queue");
+  // refreshQueue() resets the selection to the first open item when `id` is not in the (filtered) list.
+  state.selectedId = id;
+  for (const li of $$(".queue-item")) li.setAttribute("aria-selected", String(li.dataset.id === id));
+  if (!state.detail || state.detail.item.id !== id) await openItem(id);
 }
 
 async function loadTab(tab) {
@@ -449,7 +482,15 @@ function moveSelection(delta) {
 
 // ---------------------------------------------------------------- queue (detail)
 
+/** Disable the answer controls of the item currently shown (used while a different item is loading). */
+function setAnswerControlsDisabled(disabled) {
+  for (const b of $$(".answer-box button")) b.disabled = disabled;
+  const ta = $("#comment");
+  if (ta) ta.disabled = disabled;
+}
+
 async function openItem(id, { quiet = false } = {}) {
+  if (!quiet && state.detail && state.detail.item.id !== id) setAnswerControlsDisabled(true);
   try {
     const detail = await get(`/api/queue/${encodeURIComponent(id)}`);
     if (state.selectedId !== id) return;
@@ -787,6 +828,11 @@ function shakeComment() {
 async function submitAnswer() {
   const detail = state.detail;
   if (!detail || detail.item.status !== "open") return;
+  if (detail.item.id !== state.selectedId) {
+    // The selection moved (j/k) and the new item has not loaded yet; never answer the previous one by accident.
+    toast("Still loading the selected item; try again in a moment");
+    return;
+  }
   const item = detail.item;
   const options = optionsFor(item);
   let option = state.selectedOption ?? item.recommended ?? null;
@@ -835,7 +881,11 @@ function advanceTo(nextId) {
 }
 
 function scheduleUndo(id, label) {
-  if (state.lastUndo?.timer) clearTimeout(state.lastUndo.timer);
+  if (state.lastUndo) {
+    // Only the latest answer can be undone: drop the previous toast so its Undo cannot act on the wrong item.
+    clearTimeout(state.lastUndo.timer);
+    if (state.lastUndo.dismiss) state.lastUndo.dismiss();
+  }
   const dismiss = toast(`${label} · undo (u)`, { action: "Undo", onAction: () => void undoLast(), ttl: UNDO_MS });
   const timer = setTimeout(() => {
     if (state.lastUndo?.id === id) state.lastUndo = null;
@@ -996,7 +1046,7 @@ function renderTaskDrawer({ task, runs = [], items = [], children = [], events =
   if (!items.length) body.append(el("div", { class: "muted small", text: "None yet." }));
   for (const it of items) {
     body.append(
-      el("div", { class: "item-row", onclick: () => { closeTaskDrawer(); switchTab("queue"); state.selectedId = it.id; void openItem(it.id); } }, [
+      el("div", { class: "item-row", onclick: () => { closeTaskDrawer(); void showQueueItem(it.id); } }, [
         el("span", { class: `kind-tag kind-${it.kind}`, text: it.kind }),
         statusPill(it.status),
         el("span", { text: it.title }),
@@ -1157,7 +1207,8 @@ function renderBrain() {
     ta.dataset.touched = "0";
     $("#brain-dirty").textContent = "";
   } else {
-    $("#brain-dirty").textContent = "Unsaved changes (the document changed on disk; saving overwrites it)";
+    const changedOnDisk = (b.content ?? "") !== ta.dataset.loadedFor;
+    $("#brain-dirty").textContent = changedOnDisk ? "Unsaved changes (the document changed on disk; saving overwrites it)" : "Unsaved changes";
   }
   if (!state.brainViewingVersion) {
     const doc = $("#brain-doc");
@@ -1265,7 +1316,7 @@ async function refreshIdeas() {
       el("li", { class: "idea-row" }, [
         el("div", { class: "idea-title" }, [statusPill(idea.status), el("span", { text: idea.title }), idea.lead ? el("span", { class: "muted small", text: leadName(idea.lead) }) : null, el("span", { class: "muted small", text: ago(idea.created_at), title: dateTimeOf(idea.created_at) })]),
         idea.body ? el("div", { class: "idea-body", text: idea.body }) : null,
-        idea.item_id && idea.status === "new" ? el("div", {}, [el("a", { href: "#", text: "Decide in the queue", onclick: (e) => { e.preventDefault(); switchTab("queue"); state.selectedId = idea.item_id; void openItem(idea.item_id); } })]) : null,
+        idea.item_id && idea.status === "new" ? el("div", {}, [el("a", { href: "#", text: "Decide in the queue", onclick: (e) => { e.preventDefault(); void showQueueItem(idea.item_id); } })]) : null,
       ]),
     );
   }
@@ -1279,6 +1330,7 @@ async function refreshActivity() {
     const arr = Array.isArray(events) ? events : [];
     arr.sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
     state.activity = arr.slice(0, ACTIVITY_MAX);
+    for (const ev of arr) if (typeof ev.id === "number" && ev.id > state.lastEventId) state.lastEventId = ev.id;
   } catch (err) {
     reportError(err, "Could not load activity");
     return;
@@ -1301,6 +1353,7 @@ function activityRow(ev) {
 }
 
 function pushActivity(ev) {
+  if (typeof ev.id === "number" && ev.id > state.lastEventId) state.lastEventId = ev.id;
   if (state.activity.some((e) => e.id === ev.id)) return;
   state.activity.unshift(ev);
   if (state.activity.length > ACTIVITY_MAX) state.activity.length = ACTIVITY_MAX;
@@ -1351,8 +1404,10 @@ function describeEvent(ev) {
       return `Run started: ${str(p.agent)}`;
     case "run.progress":
       return `${str(p.agent)}: ${str(p.text, 100)}`;
-    case "run.finished":
-      return `Run finished: ${str(p.agent)}${p.status ? ` (${p.status})` : ""}${p.cost_usd !== undefined ? ` · ${money(p.cost_usd)}` : ""}`;
+    case "run.finished": {
+      const cost = p.cost ?? p.cost_usd; // the runner emits `cost`
+      return `Run finished: ${str(p.agent)}${p.status ? ` (${p.status})` : ""}${cost !== undefined ? ` · ${money(cost)}` : ""}`;
+    }
     case "brain.updated":
       return `Brain updated${p.source ? ` by ${p.source}` : ""}${p.changelog ? `: ${str(p.changelog)}` : ""}`;
     case "harness.paused":
@@ -1435,6 +1490,10 @@ function closeHelp() {
 function helpOpen() {
   return !$("#help-overlay").classList.contains("hidden");
 }
+/** True while any dialog, drawer or lightbox is open; shortcuts must not act on what is hidden behind it. */
+function overlayOpen() {
+  return ["#lightbox", "#help-overlay", "#new-task-modal", "#task-drawer"].some((sel) => !$(sel).classList.contains("hidden"));
+}
 
 function openLightbox(url, caption) {
   $("#lightbox-img").src = url;
@@ -1477,6 +1536,7 @@ function onKeyDown(e) {
       void submitNewTask();
       return;
     }
+    if (overlayOpen()) return;
     if (state.tab === "queue" && !isTyping(e.target)) {
       e.preventDefault();
       void submitAnswer();
@@ -1484,7 +1544,7 @@ function onKeyDown(e) {
     return;
   }
   if (isTyping(e.target) || mod || e.altKey) return;
-  if (helpOpen() || !$("#new-task-modal").classList.contains("hidden")) return;
+  if (overlayOpen()) return;
 
   if (state.pendingChord === "g") {
     state.pendingChord = null;
@@ -1527,6 +1587,10 @@ function queueKey(e) {
   if (k === "j" || k === "ArrowDown") return e.preventDefault(), moveSelection(1);
   if (k === "k" || k === "ArrowUp") return e.preventDefault(), moveSelection(-1);
   if (k === "Enter") {
+    // Only take over Enter on the page body or the list; a focused button or link must keep its native activation.
+    const t = e.target;
+    const onList = t === document.body || (t instanceof Element && t.closest("#queue-list") !== null);
+    if (!onList) return;
     e.preventDefault();
     if (state.selectedId) {
       if (!state.detail || state.detail.item.id !== state.selectedId) void openItem(state.selectedId);
@@ -1727,8 +1791,13 @@ function connectStream() {
     state.sseErrors = 0;
     stopPolling();
     $("#offline-banner").classList.add("hidden");
+    if (state.streamLost) {
+      state.streamLost = false;
+      void resync();
+    }
   };
   source.onerror = () => {
+    state.streamLost = true;
     state.sseErrors++;
     if (state.sseErrors >= 2) {
       source.close();
@@ -1737,6 +1806,20 @@ function connectStream() {
       setTimeout(connectStream, POLL_MS);
     }
   };
+}
+
+/** After an outage: refetch what is on screen and replay the events missed meanwhile into the activity feed. */
+async function resync() {
+  await Promise.all([refreshState(), loadTab(state.tab)]);
+  if (!state.lastEventId) return;
+  try {
+    const missed = await get(`/api/events?since=${encodeURIComponent(state.lastEventId)}`);
+    const arr = Array.isArray(missed) ? missed : [];
+    arr.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+    for (const ev of arr) if (ev && typeof ev === "object" && ev.type) pushActivity(ev);
+  } catch (err) {
+    console.warn("could not catch up on events", err);
+  }
 }
 
 function startPolling() {
