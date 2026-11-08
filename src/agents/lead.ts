@@ -373,6 +373,7 @@ async function handleReviewAnswer(ctx: HarnessContext, lead: LeadConfig, task: T
       return;
     case "reject":
       db.tasks.setStatus(task.id, "rejected");
+      db.items.withdrawForTask(task.id, "task rejected");
       bus.emit({ type: "task.status", task_id: task.id, item_id: item.id, payload: { status: "rejected", comment: item.answer?.comment ?? "" } });
       log.info(`task ${task.id} rejected`);
       await cleanupWorkspace(ctx, task);
@@ -390,6 +391,7 @@ async function approve(ctx: HarnessContext, lead: LeadConfig, task: Task, item: 
   bus.emit({ type: "item.updated", item_id: item.id, task_id: task.id, payload: { applied: result.ok, message: result.message } });
   if (result.ok) {
     db.tasks.setStatus(task.id, "done");
+    db.items.withdrawForTask(task.id, "task finished");
     bus.emit({ type: "task.done", task_id: task.id, item_id: item.id, payload: { title: task.title, message: result.message, url: result.url ?? null } });
     if (lead.onApprove === "merge") await cleanupWorkspace(ctx, task);
     return;
@@ -453,6 +455,7 @@ async function handleInfoAnswer(ctx: HarnessContext, lead: LeadConfig, task: Tas
     }
     case "mark_done":
       db.tasks.setStatus(task.id, "done");
+      db.items.withdrawForTask(task.id, "task finished");
       bus.emit({ type: "task.done", task_id: task.id, item_id: item.id, payload: { title: task.title, message: "marked done by the principal" } });
       return;
     default:

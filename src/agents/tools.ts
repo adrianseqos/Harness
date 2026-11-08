@@ -186,6 +186,9 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
             appendix = cap.appendix ?? "";
           }
           const body = [summary, verification ? `\n\n## Verification\n\n${verification}` : "", risks ? `\n\n## Risks and open points\n\n${risks}` : "", appendix ? `\n\n${appendix}` : ""].join("");
+          // Questions or permission requests the lead no longer needs are moot once it submits.
+          const withdrawn = db.items.withdrawForTask(taskId, "superseded by the lead's submission");
+          if (withdrawn) bus.emit({ type: "item.updated", task_id: taskId, payload: { withdrawn } });
           const item = db.items.create({
             task_id: taskId,
             lead: scope.lead ?? null,
@@ -226,6 +229,8 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
             evidence = [...cap.evidence, ...evidence];
             appendix = cap.appendix ?? "";
           }
+          const withdrawn = db.items.withdrawForTask(taskId, "superseded by the lead's completion");
+          if (withdrawn) bus.emit({ type: "item.updated", task_id: taskId, payload: { withdrawn } });
           const item = db.items.create({
             task_id: taskId,
             lead: scope.lead ?? null,
