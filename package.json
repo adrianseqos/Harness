@@ -4,8 +4,12 @@
   "description": "An autonomous agent organisation (chief of staff, leads, sub-agents) with a single prioritised human review queue and a principal brain.",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=22.13" },
-  "bin": { "harness": "./bin/harness.js" },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "harness": "./bin/harness.js"
+  },
   "scripts": {
     "start": "node --no-warnings=ExperimentalWarning --import tsx src/index.ts start",
     "harness": "node --no-warnings=ExperimentalWarning --import tsx src/index.ts",
@@ -20,6 +24,7 @@
     "zod": "^4.1.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/node": "^22.15.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

@@ -356,16 +356,25 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
         async ({ task_id, subtasks }) => {
           const t = db.tasks.get(task_id);
           if (!t) return err("task not found");
-          const created: string[] = [];
+          // Validate everything first so a bad entry never leaves half the subtasks behind.
+          const resolved: { s: (typeof subtasks)[number]; repoPath: string | null }[] = [];
           for (const s of subtasks) {
             const l = config.leads.find((x) => x.id === s.lead);
-            if (!l) return err(`unknown lead ${s.lead}`);
-            const repoPath = s.repo ? l.repos.find((r) => r === s.repo || path.basename(r) === s.repo) ?? null : l.repos.length === 1 ? l.repos[0] : null;
-            const c = db.tasks.create({ title: s.title, brief: s.brief, source: "chief", lead: s.lead, priority: s.priority, parent_id: task_id, repo: repoPath, status: "queued" });
-            created.push(c.id);
-            bus.emit({ type: "task.created", task_id: c.id, payload: { title: s.title, source: "chief", parent: task_id, lead: s.lead } });
+            if (!l) return err(`unknown lead ${s.lead}; use list_leads`);
+            const repoPath = s.repo ? (l.repos.find((r) => r === s.repo || path.basename(r) === s.repo) ?? null) : l.repos.length === 1 ? l.repos[0] : null;
+            if (s.repo && !repoPath) return err(`repo ${s.repo} is not configured for ${s.lead}`);
+            resolved.push({ s, repoPath });
           }
-          db.tasks.update(task_id, { status: "triaged", tags: Array.from(new Set([...t.tags, "split"])) });
+          const created = db.transaction(() => {
+            const ids: string[] = [];
+            for (const { s, repoPath } of resolved) {
+              const c = db.tasks.create({ title: s.title, brief: s.brief, source: "chief", lead: s.lead, priority: s.priority, parent_id: task_id, repo: repoPath, status: "queued" });
+              ids.push(c.id);
+            }
+            db.tasks.update(task_id, { status: "triaged", tags: Array.from(new Set([...t.tags, "split"])) });
+            return ids;
+          });
+          for (let i = 0; i < created.length; i++) bus.emit({ type: "task.created", task_id: created[i], payload: { title: resolved[i].s.title, source: "chief", parent: task_id, lead: resolved[i].s.lead } });
           bus.emit({ type: "task.split", task_id, payload: { children: created } });
           return text(`split into ${created.join(", ")}`);
         },
