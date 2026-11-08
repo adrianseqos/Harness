@@ -1,4 +1,7 @@
 import http from "node:http";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { HarnessContext, Event, Logger } from "../types.js";
@@ -13,6 +16,66 @@ import { serveStatic } from "./static.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const SSE_PING_MS = 15_000;
+const TOKEN_FILE = ".harness-token";
+const TOKEN_COOKIE = "harness_token";
+const TOKEN_HEADER = "x-harness-token";
+
+/**
+ * Per-installation API token. The browser receives it as a cookie when it loads the app; the CLI reads
+ * the file. Agents never see it: the policy denies reading the file and their environment is minimal,
+ * so a lead cannot answer its own permission or review items by calling the API.
+ */
+export function ensureApiToken(dataDir: string): string {
+  const file = path.join(dataDir, TOKEN_FILE);
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (/^[a-f0-9]{32,}$/.test(existing)) return existing;
+  } catch {
+    /* create below */
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(file, token + "\n", { mode: 0o600 });
+  return token;
+}
+
+export function readApiToken(dataDir: string): string | null {
+  try {
+    const t = fs.readFileSync(path.join(dataDir, TOKEN_FILE), "utf8").trim();
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
+function presentedToken(req: IncomingMessage): string | null {
+  const header = req.headers[TOKEN_HEADER];
+  if (typeof header === "string" && header) return header;
+  const cookie = req.headers.cookie;
+  if (!cookie) return null;
+  for (const part of cookie.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === TOKEN_COOKIE) return decodeURIComponent(rest.join("="));
+  }
+  return null;
+}
+
+function tokensMatch(a: string | null, b: string): boolean {
+  if (!a || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+/** Reject requests whose Host header is not this server (blocks DNS-rebinding from a web page). */
+function hostAllowed(hostHeader: string | undefined, boundHost: string, boundPort: number): boolean {
+  if (!hostHeader) return false;
+  const m = hostHeader.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
+  if (!m) return false;
+  const name = m[1].replace(/^\[|\]$/g, "").toLowerCase();
+  const port = m[2] ? Number(m[2]) : 80;
+  if (port !== boundPort) return false;
+  const local = new Set(["localhost", "127.0.0.1", "::1", boundHost.toLowerCase()]);
+  return local.has(name);
+}
 
 export interface ServerHandle {
   close(): Promise<void>;
@@ -172,6 +235,8 @@ export async function startServer(ctx: HarnessContext): Promise<ServerHandle> {
   const log = ctx.log.child("http");
   const { host, port } = ctx.config.server;
   const clients = new Set<SseClient>();
+  const token = ensureApiToken(ctx.config.paths.data);
+  let boundPort = port;
 
   const server = http.createServer((req, res) => {
     const started = Date.now();
@@ -186,6 +251,18 @@ export async function startServer(ctx: HarnessContext): Promise<ServerHandle> {
     res.on("finish", () => log.debug(`${method} ${url.pathname} → ${res.statusCode}`, { ms: Date.now() - started }));
 
     try {
+      if (!hostAllowed(req.headers.host, host, boundPort)) {
+        sendJson(res, 403, { error: "Host header does not match this server" });
+        return;
+      }
+      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/attachments/")) {
+        if (!tokensMatch(presentedToken(req), token)) {
+          sendJson(res, 401, { error: "Missing or invalid harness token. Open the app in the browser, or pass the token from data/.harness-token in the x-harness-token header." });
+          return;
+        }
+      } else if (url.pathname === "/" || url.pathname === "/index.html") {
+        res.setHeader("Set-Cookie", `${TOKEN_COOKIE}=${token}; Path=/; SameSite=Strict; HttpOnly`);
+      }
       if (url.pathname === "/api/events/stream") {
         if (method !== "GET") {
           sendJson(res, 405, { error: "The event stream only supports GET" });
@@ -226,6 +303,7 @@ export async function startServer(ctx: HarnessContext): Promise<ServerHandle> {
 
   const address = server.address() as AddressInfo;
   const actualPort = address.port;
+  boundPort = actualPort;
   const displayHost = address.family === "IPv6" && host.includes(":") ? `[${host}]` : host;
   const url = `http://${displayHost}:${actualPort}`;
   log.info("listening", { url });

@@ -12,7 +12,9 @@ import { BRAIN_OUTPUT_SCHEMA, brainDistillPrompt, brainSystemPrompt, onboardingQ
 
 const LOOP_INTERVAL_MS = 60_000;
 const MIN_DOC_CHARS = 200;
-const MIN_DOC_RATIO = 0.4;
+const MIN_DOC_RATIO = 0.25;
+const SETTING_BACKOFF = "distill_backoff_until";
+const FAILURE_BACKOFF_MS = 30 * 60_000;
 const DECISION_BATCH = 60;
 
 const SETTING_ONBOARDING = "onboarding_posted";
@@ -105,17 +107,20 @@ async function distillOnce(ctx: HarnessContext, force: boolean): Promise<Distill
   if (result.status !== "success") {
     const reason = `distiller run ${result.status}: ${result.errors.join("; ") || "no result"}`;
     log.error(reason, { run: result.runId });
+    db.settings.set(SETTING_BACKOFF, new Date(Date.now() + FAILURE_BACKOFF_MS).toISOString());
     return { changed: false, reason };
   }
 
   const output = parseOutput(result.structured);
   if (!output) {
     log.error("distiller returned no usable document", { run: result.runId });
+    db.settings.set(SETTING_BACKOFF, new Date(Date.now() + FAILURE_BACKOFF_MS).toISOString());
     return { changed: false, reason: "distiller returned no usable document" };
   }
   const tooShort = rejectIfTooShort(output.document, current);
   if (tooShort) {
     log.warn(tooShort, { run: result.runId, length: output.document.length, current: current.length });
+    db.settings.set(SETTING_BACKOFF, new Date(Date.now() + FAILURE_BACKOFF_MS).toISOString());
     return { changed: false, reason: tooShort };
   }
 
@@ -133,7 +138,7 @@ function parseOutput(raw: unknown): DistillOutput | null {
 function rejectIfTooShort(doc: string, current: string): string | null {
   const len = doc.trim().length;
   if (len < MIN_DOC_CHARS) return `rejected: new document is only ${len} characters`;
-  if (current.trim().length && len < current.trim().length * MIN_DOC_RATIO) return `rejected: new document (${len} chars) is less than 40% of the current one (${current.trim().length} chars)`;
+  if (current.trim().length && len < current.trim().length * MIN_DOC_RATIO) return `rejected: new document (${len} chars) is less than ${Math.round(MIN_DOC_RATIO * 100)}% of the current one (${current.trim().length} chars)`;
   return null;
 }
 
@@ -224,6 +229,9 @@ export function startBrainLoop(ctx: HarnessContext): Loop {
 
 function distillIsDue(ctx: HarnessContext): boolean {
   const { db, config } = ctx;
+  // After a failed or rejected distillation, wait before spending on another attempt.
+  const backoff = db.settings.get(SETTING_BACKOFF);
+  if (backoff && Date.parse(backoff) > Date.now()) return false;
   const undistilled = db.decisions.countUndistilled(true);
   if (undistilled >= config.brain.distillEveryDecisions) return true;
   if (undistilled < 1) return false;

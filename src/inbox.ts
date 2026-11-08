@@ -36,9 +36,10 @@ export function startInboxWatcher(ctx: HarnessContext): Loop {
     const raw = fs.readFileSync(abs, "utf8");
     const parsed = parseInboxFile(raw, file);
     const lead = parsed.lead && config.leads.some((l) => l.id === parsed.lead) ? parsed.lead : null;
-    const task = db.tasks.create({ title: parsed.title, brief: parsed.brief, source: "inbox", lead, priority: parsed.priority ?? 3, repo: parsed.repo ?? null, status: lead ? "queued" : "inbox" });
+    // Move the file first: if that fails we must not create a task that would be duplicated on every scan.
     const dest = path.join(config.paths.inboxProcessed, `${new Date().toISOString().replace(/[:.]/g, "-")}-${file}`);
-    fs.renameSync(abs, dest);
+    moveFile(abs, dest);
+    const task = db.tasks.create({ title: parsed.title, brief: parsed.brief, source: "inbox", lead, priority: parsed.priority ?? 3, repo: parsed.repo ?? null, status: lead ? "queued" : "inbox" });
     bus.emit({ type: "task.created", task_id: task.id, payload: { title: task.title, source: "inbox", lead } });
     log.info(`ingested ${file} as ${task.id}`);
   }
@@ -72,6 +73,16 @@ export function startInboxWatcher(ctx: HarnessContext): Loop {
       pending.clear();
     },
   };
+}
+
+function moveFile(from: string, to: string): void {
+  try {
+    fs.renameSync(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EXDEV") throw err;
+    fs.copyFileSync(from, to);
+    fs.unlinkSync(from);
+  }
 }
 
 export function parseInboxFile(raw: string, filename: string): { title: string; brief: string; lead?: string; priority?: number; repo?: string } {

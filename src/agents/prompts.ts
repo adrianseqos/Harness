@@ -125,6 +125,9 @@ export function leadResumePrompt(config: HarnessConfig, item: QueueItem): string
   }
 }
 
+/** Harness tools that end or block the lead's task; sub-agents must leave them to the lead. */
+const LEAD_ONLY_TOOLS = ["mcp__harness__submit_for_review", "mcp__harness__complete_task", "mcp__harness__ask_principal", "mcp__harness__create_subtask", "mcp__harness__submit_idea"];
+
 export function subagentDefinitions(config: HarnessConfig, lead: LeadConfig): Record<string, AgentDefinition> {
   const model = lead.subagentModel ?? config.models.subagent;
   return {
@@ -133,12 +136,14 @@ export function subagentDefinitions(config: HarnessConfig, lead: LeadConfig): Re
       prompt: `You implement one scoped piece of work inside the current workspace. Read the relevant code or documents first, follow existing conventions, keep the change minimal and coherent, and leave the workspace in a working state. Report what you changed and anything you noticed but did not change.`,
       model,
       permissionMode: "acceptEdits",
+      disallowedTools: LEAD_ONLY_TOOLS,
     },
     tester: {
       description: "Runs and extends tests, reproduces bugs, and captures evidence (logs, screenshots, recordings) into .harness/evidence/.",
       prompt: `You verify work. Run the project's test suite and any checks that apply, add tests for new behaviour, and reproduce reported bugs before and after a fix. Capture evidence into .harness/evidence/ (screenshots or short recordings for anything visible, logs otherwise) with descriptive file names. Report exactly what you ran and what you saw; never report green without output to back it.`,
       model,
       permissionMode: "acceptEdits",
+      disallowedTools: LEAD_ONLY_TOOLS,
     },
     reviewer: {
       description: "Reviews a diff or document for correctness, clarity and fit with the codebase or the brief. Read-only.",

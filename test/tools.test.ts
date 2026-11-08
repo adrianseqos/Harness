@@ -285,7 +285,7 @@ test("shared: submit_idea, report_progress, search_decisions", async () => {
   const item = db.items.get(stored.item_id!)!;
   assert.equal(item.kind, "idea");
   assert.equal(item.title, "Idea: Cache the API");
-  assert.equal(item.recommended, "pursue");
+  assert.equal(item.recommended, null, "ideas carry no recommendation so parking one is not an overrule");
   assert.deepEqual(
     item.options.map((o) => o.key),
     ["pursue", "park", "discard"],
@@ -302,7 +302,7 @@ test("shared: submit_idea, report_progress, search_decisions", async () => {
   db.items.answer(item.id, "park", "not this quarter");
   const found = await h.call("search_decisions", { query: "cache" });
   assert.ok(found.text.includes('chose "park"'));
-  assert.ok(found.text.includes("(recommended: pursue)"));
+  assert.ok(!found.text.includes("(recommended:"));
   assert.ok(found.text.includes("not this quarter"));
   await h.close();
 });

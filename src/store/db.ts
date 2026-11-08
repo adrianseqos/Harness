@@ -525,6 +525,19 @@ export class Store {
       }
       return { total: rows.length, byKind, byLead, stale: 0 };
     },
+    /** Answered items of a lead's tasks that no loop has acted on yet (meta.acted_at missing). */
+    answeredUnacted: (lead: string): QueueItem[] =>
+      (
+        this.db
+          .prepare(
+            `SELECT i.* FROM queue_items i JOIN tasks t ON t.id = i.task_id
+             WHERE i.status = 'answered' AND t.lead = ? AND json_extract(i.meta, '$.acted_at') IS NULL
+               AND i.answered_at > t.updated_at
+               AND i.kind IN ('review', 'permission', 'question', 'decision', 'info')
+             ORDER BY i.answered_at ASC`,
+          )
+          .all(lead) as Row[]
+      ).map(rowToItem),
     openOlderThan: (hours: number): QueueItem[] => {
       const cutoff = new Date(Date.now() - hours * 3600_000).toISOString();
       return (this.db.prepare("SELECT * FROM queue_items WHERE status = 'open' AND created_at < ? ORDER BY priority ASC, created_at ASC").all(cutoff) as Row[]).map(rowToItem);

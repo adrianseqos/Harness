@@ -20,7 +20,7 @@ export interface ToolScope {
    * Lead loops use it to commit, capture the diff and run the secrets scan.
    * Returning blockers prevents submission and the agent gets them as an error.
    */
-  captureEvidence?: () => Promise<{ evidence: Evidence[]; blockers: string[]; appendix?: string }>;
+  captureEvidence?: () => Promise<{ evidence: Evidence[]; blockers: string[]; appendix?: string; head?: string }>;
 }
 
 export interface HarnessToolServer {
@@ -84,7 +84,7 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
             { key: "park", label: "Park", description: "Keep it, not now" },
             { key: "discard", label: "Discard" },
           ],
-          recommended: "pursue",
+          recommended: null,
           rationale: `Proposed by ${scope.agent}`,
           meta: { idea_id: idea.id },
         });
@@ -138,6 +138,7 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
           bus.emit({ type: "item.created", item_id: item.id, task_id: taskId, payload: { kind: item.kind, title: item.title } });
           const ev = await bus.waitFor("item.answered", (e) => e.item_id === item.id, waitMs);
           if (!ev) {
+            db.settings.set(`pending:${taskId}`, item.id);
             return text(`pending: no answer within ${config.review.permissionWaitMin} minutes (item ${item.id}). Finish your turn now with a short status of what is done and what you are waiting for. You will be resumed with the answer.`);
           }
           db.tasks.setStatus(taskId, "running");
@@ -179,16 +180,19 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
           if (!task) return err("task not found");
           let evidence = takeStaged(ctx, taskId);
           let appendix = "";
+          let reviewedHead: string | null = null;
           if (scope.captureEvidence) {
             const cap = await scope.captureEvidence();
             if (cap.blockers.length) return err(`cannot submit yet:\n- ${cap.blockers.join("\n- ")}\nFix these and call submit_for_review again.`);
             evidence = [...cap.evidence, ...evidence];
             appendix = cap.appendix ?? "";
+            reviewedHead = cap.head ?? null;
           }
           const body = [summary, verification ? `\n\n## Verification\n\n${verification}` : "", risks ? `\n\n## Risks and open points\n\n${risks}` : "", appendix ? `\n\n${appendix}` : ""].join("");
           // Questions or permission requests the lead no longer needs are moot once it submits.
           const withdrawn = db.items.withdrawForTask(taskId, "superseded by the lead's submission");
           if (withdrawn) bus.emit({ type: "item.updated", task_id: taskId, payload: { withdrawn } });
+          db.settings.set(`nudged:${taskId}`, "0");
           const item = db.items.create({
             task_id: taskId,
             lead: scope.lead ?? null,
@@ -204,6 +208,7 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
             rationale: rationale ?? null,
             evidence,
             priority: task.priority,
+            meta: reviewedHead ? { reviewed_head: reviewedHead } : {},
           });
           db.tasks.setStatus(taskId, "review", { result_summary: summary.slice(0, 2000) });
           bus.emit({ type: "item.created", item_id: item.id, task_id: taskId, payload: { kind: "review", title: item.title } });
@@ -231,6 +236,7 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
           }
           const withdrawn = db.items.withdrawForTask(taskId, "superseded by the lead's completion");
           if (withdrawn) bus.emit({ type: "item.updated", task_id: taskId, payload: { withdrawn } });
+          db.settings.set(`nudged:${taskId}`, "0");
           const item = db.items.create({
             task_id: taskId,
             lead: scope.lead ?? null,
@@ -341,7 +347,9 @@ export function createHarnessTools(ctx: HarnessContext, scope: ToolScope): Harne
           } else if (l.repos.length === 1) {
             repoPath = l.repos[0];
           }
-          db.tasks.update(task_id, { lead, priority: clampPriority(priority), brief, repo: repoPath, status: "queued", title: title?.trim() || t.title, tags: tags ?? t.tags });
+          // A (re)assigned task starts a fresh session so the lead reads the new brief.
+          db.tasks.update(task_id, { lead, priority: clampPriority(priority), brief, repo: repoPath, status: "queued", title: title?.trim() || t.title, tags: tags ?? t.tags, session_id: null });
+          db.settings.set(`nudged:${task_id}`, "0");
           bus.emit({ type: "task.assigned", task_id, payload: { lead, priority, repo: repoPath } });
           return text(`assigned ${task_id} to ${lead} at p${priority}${repoPath ? ` in ${repoPath}` : ""}`);
         },

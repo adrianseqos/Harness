@@ -33,6 +33,21 @@ export interface RunSpec {
   outputSchema?: Record<string, unknown>;
   abortController?: AbortController;
   onMessage?: (m: SDKMessage) => void;
+  /** Restrictive policy-tier settings for the session (e.g. disableAllHooks). */
+  managedSettings?: Record<string, unknown>;
+}
+
+const ENV_PASSTHROUGH = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_[A-Z]+|TERM|TMPDIR|TMP|TEMP|TZ|PWD|SHLVL|XDG_[A-Z_]+|NODE_[A-Z_]+|npm_config_[a-z_]+|NO_PROXY|no_proxy|HTTPS?_PROXY|https?_proxy|SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GIT_[A-Z_]+|CLAUDE[A-Z0-9_]*|ANTHROPIC_[A-Z_]+|AWS_REGION|AWS_DEFAULT_REGION|CLOUD_ML_REGION|ANTHROPIC_VERTEX_PROJECT_ID|DISABLE_[A-Z_]+|MAX_THINKING_TOKENS|JAVA_TOOL_OPTIONS|SYSTEMROOT|SystemRoot|COMSPEC|APPDATA|LOCALAPPDATA|USERPROFILE|PROGRAMFILES|WINDIR)$/;
+
+/**
+ * Environment handed to agent sessions: only what the CLI, git and the toolchain need,
+ * never the harness's other secrets (database passwords, cloud keys, tokens from .env).
+ */
+export function agentEnv(config: HarnessConfig): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  const extra = new Set(config.agentEnv);
+  for (const [k, v] of Object.entries(process.env)) if (ENV_PASSTHROUGH.test(k) || extra.has(k)) out[k] = v;
+  return out;
 }
 
 export interface RunResult {
@@ -116,8 +131,9 @@ export function createRunner(deps: Deps): Runner {
       abortController: abort,
       systemPrompt: typeof spec.systemPrompt === "string" ? spec.systemPrompt : { type: "preset", preset: "claude_code", append: spec.systemPrompt.append },
       outputFormat: spec.outputSchema ? { type: "json_schema", schema: spec.outputSchema } : undefined,
-      env: { ...process.env },
+      env: agentEnv(config),
       persistSession: true,
+      managedSettings: spec.managedSettings as Options["managedSettings"],
     };
 
     out.write(JSON.stringify({ ts: started, type: "harness.run", agent: spec.agent, taskId: spec.taskId ?? null, model: spec.model, resume: spec.resume ?? null, prompt: spec.prompt }) + "\n");
@@ -147,7 +163,12 @@ export function createRunner(deps: Deps): Runner {
           }
         } else if (m.type === "result") {
           result.sessionId = m.session_id;
-          result.costUsd = m.total_cost_usd ?? 0;
+          // A resumed session reports the cumulative cost of its whole transcript; charge only what this run added.
+          const total = m.total_cost_usd ?? 0;
+          const key = `session_cost:${m.session_id}`;
+          const previous = Number(db.settings.get(key) ?? 0);
+          result.costUsd = Math.max(0, total - (Number.isFinite(previous) ? previous : 0));
+          db.settings.set(key, String(Math.max(total, Number.isFinite(previous) ? previous : 0)));
           result.turns = m.num_turns ?? 0;
           result.permissionDenials = (m.permission_denials ?? []).map((d) => ({ tool_name: d.tool_name, tool_input: d.tool_input }));
           if (m.subtype === "success") {

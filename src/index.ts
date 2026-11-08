@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { EXAMPLE_CONFIG, findConfigFile, loadConfig } from "./config.js";
 import { Store } from "./store/db.js";
 import { startHarness, writePidFile, buildContext, costToday } from "./scheduler.js";
+import { readApiToken } from "./server/http.js";
 import type { HarnessConfig } from "./types.js";
 
 const HELP = `harness — your agent organisation with one review queue
@@ -49,8 +50,14 @@ function readBriefFlag(v: string | true | undefined): string {
 
 async function api(config: HarnessConfig, method: string, route: string, body?: unknown): Promise<{ ok: boolean; status: number; json: unknown } | null> {
   const url = `http://${config.server.host}:${config.server.port}${route}`;
+  const token = readApiToken(config.paths.data);
   try {
-    const res = await fetch(url, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(url, {
+      method,
+      headers: { "content-type": "application/json", host: `${config.server.host}:${config.server.port}`, ...(token ? { "x-harness-token": token } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
     const text = await res.text();
     let json: unknown = text;
     try {

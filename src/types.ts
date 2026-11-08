@@ -51,6 +51,8 @@ export interface HarnessConfig {
   permissions: PermissionPolicy;
   /** MCP servers (stdio) available to every lead. */
   mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  /** Extra environment variable names handed to agent sessions (on top of PATH, HOME, proxy and Claude auth variables). */
+  agentEnv: string[];
   /** Resolved absolute paths, filled in by config.ts. */
   paths: {
     root: string;

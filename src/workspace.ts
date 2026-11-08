@@ -26,6 +26,8 @@ export interface CapturedEvidence {
   evidence: Evidence[];
   blockers: string[];
   appendix?: string;
+  /** Commit that was reviewed (git workspaces); approvals refuse to apply if the branch moved past it. */
+  head?: string;
 }
 
 export interface ApprovalResult {
@@ -216,6 +218,7 @@ export async function captureWorkspaceEvidence(ctx: HarnessContext, task: Task):
   const evidence: Evidence[] = [];
   const blockers: string[] = [];
   let appendix: string | undefined;
+  let head: string | undefined;
 
   if (kind === "git") {
     try {
@@ -223,6 +226,7 @@ export async function captureWorkspaceEvidence(ctx: HarnessContext, task: Task):
       blockers.push(...diff.blockers);
       evidence.push(...diff.evidence);
       appendix = diff.appendix;
+      head = diff.head;
     } catch (err) {
       const msg = describeError(err);
       log.error(`could not capture the diff for ${task.id}`, { error: msg });
@@ -239,7 +243,7 @@ export async function captureWorkspaceEvidence(ctx: HarnessContext, task: Task):
     if (!evidence.length) appendix = "No files were produced.";
   }
 
-  return { evidence, blockers, appendix };
+  return { evidence, blockers, appendix, head };
 }
 
 async function captureDiff(ctx: HarnessContext, task: Task, dir: string): Promise<CapturedEvidence> {
@@ -267,7 +271,8 @@ async function captureDiff(ctx: HarnessContext, task: Task, dir: string): Promis
   const evidence: Evidence[] = [{ type: "diff", path: `${task.id}/changes.diff`, caption: `${files} file${files === 1 ? "" : "s"} changed` }];
   const statLines = stat.trimEnd().split("\n");
   const shown = statLines.length > STAT_MAX_LINES ? [...statLines.slice(0, STAT_MAX_LINES), `… ${statLines.length - STAT_MAX_LINES} more lines`] : statLines;
-  return { evidence, blockers, appendix: `## Changes\n\`\`\`\n${shown.join("\n")}\n\`\`\`` };
+  const head = (await git(dir, ["rev-parse", "HEAD"])).stdout.trim();
+  return { evidence, blockers, appendix: `## Changes\n\`\`\`\n${shown.join("\n")}\n\`\`\``, head };
 }
 
 async function resolveBaseRef(task: Task, dir: string): Promise<string | null> {
@@ -357,11 +362,12 @@ function safeStage(ctx: HarnessContext, task: Task, candidates: StagedCandidate[
 // ---------- approval ----------
 
 /** Apply the lead's onApprove action after the principal approved a review. Always emits approval.applied. */
-export async function applyApproval(ctx: HarnessContext, task: Task, lead: LeadConfig): Promise<ApprovalResult> {
+export async function applyApproval(ctx: HarnessContext, task: Task, lead: LeadConfig, opts: { expectedHead?: string | null } = {}): Promise<ApprovalResult> {
   const log = ctx.log.child("workspace");
   let result: ApprovalResult;
   try {
-    result = await doApply(task, lead);
+    const moved = await branchMovedSince(task, opts.expectedHead ?? null);
+    result = moved ?? (await doApply(task, lead));
   } catch (err) {
     result = { ok: false, message: `Approval could not be applied: ${describeError(err)}` };
   }
@@ -369,6 +375,15 @@ export async function applyApproval(ctx: HarnessContext, task: Task, lead: LeadC
   else log.error(`approval failed for ${task.id}`, { action: lead.onApprove, message: result.message });
   ctx.bus.emit({ type: "approval.applied", task_id: task.id, payload: { ok: result.ok, message: result.message, ...(result.url ? { url: result.url } : {}), action: lead.onApprove } });
   return result;
+}
+
+/** The principal approved a specific commit; refuse to merge or push anything newer. */
+async function branchMovedSince(task: Task, expectedHead: string | null): Promise<ApprovalResult | null> {
+  if (!expectedHead || !task.branch || !task.repo) return null;
+  if (!(await isGitRepo(task.repo))) return null;
+  const current = (await git(task.repo, ["rev-parse", `refs/heads/${task.branch}`])).stdout.trim();
+  if (current === expectedHead) return null;
+  return { ok: false, message: `Branch ${task.branch} moved after the review (reviewed ${expectedHead.slice(0, 10)}, now ${current.slice(0, 10)}). Ask the lead to submit the current state for a new review.` };
 }
 
 async function doApply(task: Task, lead: LeadConfig): Promise<ApprovalResult> {

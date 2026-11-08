@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { HarnessContext, Idea, IdeaStatus, ItemKind, ItemStatus, QueueItem, Run, Task, TaskStatus } from "../types.js";
 import { brainStats, distillBrain } from "../agents/brain.js";
+import { startOfLocalDay } from "../time.js";
 
 /**
  * JSON API route handlers for the queue app. Pure functions of (ctx, request) → response;
@@ -110,10 +111,8 @@ function requireLead(ctx: HarnessContext, id: string) {
   return lead;
 }
 
-function startOfToday(): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString();
+function startOfToday(ctx: HarnessContext): string {
+  return startOfLocalDay(ctx.config.principal.timezone);
 }
 
 function ok(json: unknown, status = 200): ApiResponse {
@@ -164,7 +163,7 @@ function getState(ctx: HarnessContext): ApiResponse {
     },
     paused: ctx.isPaused(),
     pausedByUser: db.settings.get("paused") === "1",
-    costToday: db.runs.costSince(startOfToday()),
+    costToday: db.runs.costSince(startOfToday(ctx)),
     budget: config.budget,
     agreement: db.decisions.agreementStats().last20,
     version: packageVersion(ctx),
@@ -282,7 +281,7 @@ function undoQueueItem(ctx: HarnessContext, req: ApiRequest): ApiResponse {
   if (item.status !== "answered") throw new HttpError(409, "Only an answered item can be undone");
   const answeredAt = item.answered_at ? Date.parse(item.answered_at) : NaN;
   if (Number.isNaN(answeredAt) || Date.now() - answeredAt > UNDO_WINDOW_MS) throw new HttpError(409, "The undo window of 60 seconds has passed");
-  if (item.meta.applied) throw new HttpError(409, "This answer has already been acted on and cannot be undone");
+  if (item.meta.applied || item.meta.acted_at) throw new HttpError(409, "This answer has already been acted on and cannot be undone");
   if (!ctx.db.items.undo(item.id)) throw new HttpError(409, "Nothing to undo");
   if (item.kind === "idea") revertIdeaAnswer(ctx, item);
   ctx.bus.emit({ type: "item.undone", item_id: item.id, task_id: item.task_id, payload: { kind: item.kind, lead: item.lead, previous: item.answer } });
@@ -415,7 +414,7 @@ function patchTask(ctx: HarnessContext, req: ApiRequest): ApiResponse {
 // ---------- agents ----------
 
 function costTodayFor(ctx: HarnessContext, agent: string): number {
-  const r = ctx.db.db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM runs WHERE agent = ? AND started_at >= ?").get(agent, startOfToday()) as { c: number } | undefined;
+  const r = ctx.db.db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM runs WHERE agent = ? AND started_at >= ?").get(agent, startOfToday(ctx)) as { c: number } | undefined;
   return r?.c ?? 0;
 }
 

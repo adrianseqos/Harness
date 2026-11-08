@@ -60,6 +60,7 @@ export const ConfigSchema = z.object({
   leads: z.array(Lead).min(1),
   permissions: Permissions.default({ allow: [], ask: [], deny: [] }),
   mcpServers: z.record(z.string(), McpServer).default({}),
+  agentEnv: z.array(z.string()).default([]),
   paths: z
     .object({
       data: z.string().default("data"),
@@ -150,6 +151,7 @@ export function resolveConfig(raw: unknown, root: string): HarnessConfig {
     leads,
     permissions: policy,
     mcpServers: parsed.mcpServers,
+    agentEnv: parsed.agentEnv,
     paths: {
       root,
       data,

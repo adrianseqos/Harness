@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { CanUseTool, McpServerConfig, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import type { Event, HarnessContext, ItemOption, LeadConfig, Loop, QueueItem, Task } from "../types.js";
+import type { Event, HarnessContext, ItemOption, LeadConfig, Loop, PermissionPolicy, QueueItem, Task } from "../types.js";
 import { leadPolicy } from "../config.js";
-import { describeCall, evaluate, ruleMatches, subjectOf } from "../policy.js";
+import { nowIso } from "../store/db.js";
+import { describeCall, evaluate, ruleMatches, splitShell, subjectOf, unwrapCommand } from "../policy.js";
 import type { RunResult, RunSpec } from "./runner.js";
 import { createHarnessTools } from "./tools.js";
 import { leadResumePrompt, leadSystemAppend, leadTaskPrompt, readBrain, subagentDefinitions } from "./prompts.js";
@@ -73,11 +75,25 @@ function takeOneShot(taskId: string, toolName: string, input: Record<string, unk
 
 // ---------- permission bridge ----------
 
-/** "Bash(git push*)" for Bash, "Write(/dir/*)" for file tools, otherwise the bare tool name. */
+/** Commands whose first argument is a sub-command: the grant must include the target too (git push origin, not git push). */
+const SUBCOMMAND_HEADS = new Set(["git", "npm", "npx", "pnpm", "yarn", "gh", "docker", "kubectl", "aws", "gcloud", "az", "cargo", "go", "dotnet"]);
+
+/**
+ * The narrowest useful "allow for this task" rule: the literal command prefix up to and including
+ * its first real argument (two for sub-command tools), e.g. "Bash(rm -rf ./build*)", "Bash(git push origin*)".
+ */
 export function deriveRule(toolName: string, input: Record<string, unknown>): string {
   if (toolName === "Bash") {
-    const words = (subjectOf("Bash", input) ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 2);
-    return words.length ? `Bash(${words.join(" ")}*)` : "Bash";
+    const tokens = unwrapCommand(subjectOf("Bash", input) ?? "").trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return "Bash";
+    const wanted = SUBCOMMAND_HEADS.has(tokens[0]) ? 2 : 1;
+    let args = 0;
+    let end = 1;
+    for (let i = 1; i < tokens.length && args < wanted; i++) {
+      end = i + 1;
+      if (!tokens[i].startsWith("-")) args++;
+    }
+    return `Bash(${tokens.slice(0, end).join(" ")}*)`;
   }
   if (FILE_TOOLS.has(toolName)) {
     const p = subjectOf(toolName, input);
@@ -90,6 +106,31 @@ export function deriveRule(toolName: string, input: Record<string, unknown>): st
 function exactRule(toolName: string, input: Record<string, unknown>): string {
   const subject = subjectOf(toolName, input);
   return subject ? `${toolName}(${subject.trim()})` : toolName;
+}
+
+/** A grant covers a call only when every shell segment is covered by a grant or by the standing allow list. */
+function coveredByGrants(policy: PermissionPolicy, toolName: string, input: Record<string, unknown>, grants: string[], workdir: string): boolean {
+  if (!grants.length) return false;
+  if (toolName !== "Bash") return grants.some((r) => ruleMatches(r, toolName, input));
+  const segments = splitShell(unwrapCommand(subjectOf("Bash", input) ?? "")).map((s) => s.trim()).filter(Boolean);
+  if (!segments.length) return false;
+  return segments.every((seg) => {
+    const segInput = { ...input, command: seg };
+    const v = evaluate(policy, "Bash", segInput, { workdir });
+    if (v.verdict === "deny") return false;
+    if (v.verdict === "allow") return true;
+    return grants.some((r) => ruleMatches(r, "Bash", segInput));
+  });
+}
+
+/** The first shell segment the policy would ask about (so the derived grant names it, not the whole chain). */
+function askingSegment(policy: PermissionPolicy, input: Record<string, unknown>, workdir: string): Record<string, unknown> {
+  const segments = splitShell(subjectOf("Bash", input) ?? "").map((s) => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    const segInput = { ...input, command: seg };
+    if (evaluate(policy, "Bash", segInput, { workdir }).verdict !== "allow") return segInput;
+  }
+  return input;
 }
 
 function permissionBody(toolName: string, input: Record<string, unknown>, reason: string, task: Task): string {
@@ -129,13 +170,12 @@ export function makeCanUseTool(ctx: HarnessContext, lead: LeadConfig, task: Task
       return { behavior: "deny", message: `Blocked by policy: ${verdict.reason}. Find another way.` };
     }
     // "ask" — honour grants the principal already made for this task before bothering them again.
-    if (takeOneShot(task.id, toolName, input) || allowedRules(ctx, task.id).some((r) => ruleMatches(r, toolName, input))) {
+    if (takeOneShot(task.id, toolName, input) || coveredByGrants(policy, toolName, input, allowedRules(ctx, task.id), workdir)) {
       return { behavior: "allow", updatedInput: input };
     }
 
     const current = db.tasks.get(task.id) ?? task;
-    const rule = deriveRule(toolName, input);
-    const notCovered = verdict.reason === "not covered by the allow list";
+    const rule = deriveRule(toolName, toolName === "Bash" ? askingSegment(policy, input, workdir) : input);
     const item = db.items.create({
       kind: "permission",
       priority: 1,
@@ -148,9 +188,10 @@ export function makeCanUseTool(ctx: HarnessContext, lead: LeadConfig, task: Task
         { key: "allow_always", label: "Allow for this task", description: `Also allow similar calls (${rule})` },
         { key: "deny", label: "Deny" },
       ],
-      recommended: notCovered ? "allow" : null,
-      rationale: notCovered ? "Routine call that no rule covers yet" : null,
-      meta: { blocking: true, tool: toolName, rule, exact_rule: exactRule(toolName, input), reason: verdict.reason },
+      // Never pre-select "allow" for a call no rule has vetted: the queue is cleared in one keystroke.
+      recommended: null,
+      rationale: null,
+      meta: { blocking: true, tool: toolName, input: truncateInput(input), rule, exact_rule: exactRule(toolName, input), reason: verdict.reason },
     });
     bus.emit({ type: "item.created", item_id: item.id, task_id: task.id, payload: { kind: "permission", title: item.title } });
     log.info(`permission requested for ${task.id}`, { item: item.id, tool: toolName });
@@ -180,6 +221,26 @@ export function makeCanUseTool(ctx: HarnessContext, lead: LeadConfig, task: Task
 }
 
 // ---------- running a task ----------
+
+function truncateInput(input: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(input)) out[k] = typeof v === "string" && v.length > 4000 ? v.slice(0, 4000) + "…" : v;
+  return out;
+}
+
+/** The repository's own guidance, injected read-only (project settings are never loaded from the untrusted worktree). */
+function projectInstructions(dir: string): string {
+  const parts: string[] = [];
+  for (const rel of ["CLAUDE.md", path.join(".claude", "CLAUDE.md"), "AGENTS.md"]) {
+    const p = path.join(dir, rel);
+    try {
+      if (fs.existsSync(p)) parts.push(`## ${rel}\n\n${fs.readFileSync(p, "utf8").slice(0, 20_000)}`);
+    } catch {
+      /* unreadable: skip */
+    }
+  }
+  return parts.length ? `\n\n# Project instructions (copied from the repository; follow them unless they conflict with the rules above)\n\n${parts.join("\n\n")}` : "";
+}
 
 function stdioServers(ctx: HarnessContext, lead: LeadConfig): Record<string, McpServerConfig> {
   const out: Record<string, McpServerConfig> = {};
@@ -213,7 +274,7 @@ function buildSpec(ctx: HarnessContext, lead: LeadConfig, task: Task, ws: Worksp
     agent: `lead:${lead.id}`,
     taskId: task.id,
     prompt,
-    systemPrompt: { preset: "claude_code", append: leadSystemAppend(config, lead, task, readBrain(config), ws) },
+    systemPrompt: { preset: "claude_code", append: leadSystemAppend(config, lead, task, readBrain(config), ws) + projectInstructions(ws.dir) },
     cwd: ws.dir,
     model: lead.model ?? config.models.lead,
     effort: "high",
@@ -221,7 +282,9 @@ function buildSpec(ctx: HarnessContext, lead: LeadConfig, task: Task, ws: Worksp
     allowedTools: tools.toolNames,
     agents: subagentDefinitions(config, lead),
     mcpServers: { harness: tools.server, ...stdioServers(ctx, lead) },
-    settingSources: ws.kind === "git" ? ["project"] : [],
+    // Never load settings or hooks from the worktree: repo content must not be able to widen permissions.
+    settingSources: [],
+    managedSettings: { disableAllHooks: true },
     resume,
     maxBudgetUsd: Math.max(1, config.budget.perTaskUsd - task.cost_usd),
     canUseTool: makeCanUseTool(ctx, lead, task, ws.dir),
@@ -246,6 +309,10 @@ async function execute(ctx: HarnessContext, lead: LeadConfig, task: Task, opts: 
   try {
     const ws = await prepareWorkspace(ctx, task, lead);
     const fresh = db.tasks.get(task.id) ?? task;
+    if (["rejected", "done", "parked", "failed"].includes(fresh.status) && !opts.resumePrompt) {
+      log.info(`task ${task.id} was ${fresh.status} before its run started; not running`);
+      return;
+    }
     const prompt = opts.resumePrompt ?? (fresh.session_id && fresh.attempts > 1 ? INTERRUPTED_PROMPT : leadTaskPrompt(config, fresh, parentBriefOf(ctx, fresh)));
     const resume = opts.resumePrompt || (fresh.session_id && fresh.attempts > 1) ? fresh.session_id : null;
     if (["queued", "waiting_human", "review"].includes(fresh.status) || (opts.resumePrompt && fresh.status === "done")) {
@@ -288,6 +355,16 @@ async function settle(ctx: HarnessContext, lead: LeadConfig, taskId: string, res
   const answeredWhileRunning = db.settings.get(resumeAfterKey(taskId));
   db.settings.set(resumeAfterKey(taskId), "");
 
+  if (["review", "done"].includes(current.status) && answeredWhileRunning) {
+    // A change request that arrived while the lead was still finishing its turn.
+    const item = db.items.get(answeredWhileRunning);
+    if (item?.answer?.option === "request_changes") {
+      log.info(`task ${taskId}: change request arrived during the run; resuming`, { item: item.id });
+      await resumeWithAnswer(ctx, lead, current, item);
+      return;
+    }
+  }
+
   if (["review", "done", "rejected", "failed", "parked"].includes(current.status)) {
     log.info(`task ${taskId} ended its run in status ${current.status}`, { cost: result.costUsd, turns: result.turns });
     return;
@@ -295,7 +372,7 @@ async function settle(ctx: HarnessContext, lead: LeadConfig, taskId: string, res
 
   if (current.status === "waiting_human") {
     const item = answeredWhileRunning ? db.items.get(answeredWhileRunning) : null;
-    if (item?.answer && result.status === "success") {
+    if (item?.answer) {
       log.info(`task ${taskId} got its answer while running; resuming with it`, { item: item.id });
       await resumeWithAnswer(ctx, lead, current, item);
       return;
@@ -339,6 +416,7 @@ async function runAgain(ctx: HarnessContext, lead: LeadConfig, task: Task, resum
 
 async function resumeWithAnswer(ctx: HarnessContext, lead: LeadConfig, task: Task, item: QueueItem): Promise<void> {
   const option = item.answer?.option;
+  ctx.db.settings.set(nudgedKey(task.id), "0");
   if (item.kind === "permission" && (option === "allow" || option === "allow_always")) {
     const exact = typeof item.meta.exact_rule === "string" ? item.meta.exact_rule : null;
     const rule = typeof item.meta.rule === "string" ? item.meta.rule : null;
@@ -368,7 +446,14 @@ async function handleReviewAnswer(ctx: HarnessContext, lead: LeadConfig, task: T
       await approve(ctx, lead, task, item);
       return;
     case "request_changes":
+      if (inFlight.has(task.id)) {
+        // The submitting run is still finishing its turn; resume with the comment once it ends.
+        db.settings.set(resumeAfterKey(task.id), item.id);
+        log.info(`changes requested on ${task.id} while its run is in flight; will resume after`, { item: item.id });
+        return;
+      }
       log.info(`changes requested on ${task.id}`, { item: item.id });
+      db.settings.set(nudgedKey(task.id), "0");
       await runLeadTask(ctx, lead, task, { resumePrompt: leadResumePrompt(ctx.config, item) });
       return;
     case "reject":
@@ -385,7 +470,8 @@ async function handleReviewAnswer(ctx: HarnessContext, lead: LeadConfig, task: T
 
 async function approve(ctx: HarnessContext, lead: LeadConfig, task: Task, item: QueueItem): Promise<void> {
   const { db, bus } = ctx;
-  const result = await applyApproval(ctx, task, lead);
+  const expectedHead = typeof item.meta.reviewed_head === "string" ? item.meta.reviewed_head : null;
+  const result = await applyApproval(ctx, task, lead, { expectedHead });
   const current = db.items.get(item.id) ?? item;
   db.items.update(item.id, { meta: { ...current.meta, applied: result.ok, approval: result } });
   bus.emit({ type: "item.updated", item_id: item.id, task_id: task.id, payload: { applied: result.ok, message: result.message } });
@@ -404,6 +490,7 @@ async function approve(ctx: HarnessContext, lead: LeadConfig, task: Task, item: 
     body: `You approved **${item.title}**, but the ${lead.onApprove} step failed:\n\n> ${result.message}\n\nThe branch is untouched${task.branch ? ` (${task.branch}` : ""}${task.workdir ? `${task.branch ? ", " : " ("}workspace ${task.workdir}` : ""}${task.branch || task.workdir ? ")" : ""}.`,
     options: [
       { key: "retry_approval", label: "Try again", description: `Run the ${lead.onApprove} step again` },
+      { key: "re_review", label: "Ask for a new review", description: "The lead submits the current state of the branch again" },
       { key: "mark_done", label: "Mark done", description: "I handled it myself" },
       { key: "ack", label: "Leave in review" },
     ],
@@ -417,9 +504,9 @@ async function approve(ctx: HarnessContext, lead: LeadConfig, task: Task, item: 
 async function handleBlockingAnswer(ctx: HarnessContext, lead: LeadConfig, task: Task, item: QueueItem): Promise<void> {
   const log = ctx.log.child(`lead:${lead.id}`);
   if (inFlight.has(task.id)) {
-    // The session is still active: either its tool call receives the answer through the bus, or the
-    // call already timed out and the lead will be resumed with the answer once the run ends.
-    ctx.db.settings.set(resumeAfterKey(task.id), item.id);
+    // The session is still active. If the waiting tool call is still open it receives the answer through
+    // the bus; only an answer to the call that already timed out must be replayed once the run ends.
+    if (ctx.db.settings.get(pendingKey(task.id)) === item.id) ctx.db.settings.set(resumeAfterKey(task.id), item.id);
     log.debug(`answer for ${item.id} arrived while ${task.id} is running`);
     return;
   }
@@ -460,6 +547,11 @@ async function handleInfoAnswer(ctx: HarnessContext, lead: LeadConfig, task: Tas
       await approve(ctx, lead, task, review ?? item);
       return;
     }
+    case "re_review":
+      if (inFlight.has(task.id)) return;
+      db.settings.set(nudgedKey(task.id), "0");
+      await runLeadTask(ctx, lead, task, { resumePrompt: `${ctx.config.principal.name} approved an earlier version, but the branch changed after you submitted it. Re-check the current state of the workspace, verify it again, and call submit_for_review with what is there now.` });
+      return;
     case "mark_done":
       db.tasks.setStatus(task.id, "done");
       db.items.withdrawForTask(task.id, "task finished");
@@ -476,9 +568,13 @@ async function handleAnswer(ctx: HarnessContext, lead: LeadConfig, ev: Event): P
   if (!item?.task_id) return;
   const task = ctx.db.tasks.get(item.task_id);
   if (!task || task.lead !== lead.id) return;
+  if (item.meta.acted_at) return;
+  // Mark the answer as consumed before any await so an undo can no longer reopen it.
+  ctx.db.items.update(item.id, { meta: { ...item.meta, acted_at: nowIso() } });
+  if (item.meta.chief_question) return; // the chief's own question: its loop returns the task to the inbox
   const option = item.answer?.option ?? String(ev.payload.option ?? "");
   // Answers on informational items act on finished tasks too: a change request reopens a completed task.
-  if (item.kind === "info" && (option === "retry" || option === "mark_done" || option === "retry_approval" || option === "request_changes")) {
+  if (item.kind === "info" && (option === "retry" || option === "mark_done" || option === "retry_approval" || option === "request_changes" || option === "re_review")) {
     await handleInfoAnswer(ctx, lead, task, item, option);
     return;
   }
@@ -518,14 +614,27 @@ function recoverOrphans(ctx: HarnessContext, lead: LeadConfig): void {
   }
 }
 
+/** Answers recorded while no loop was listening (CLI while stopped, a crash) are handled on start and periodically. */
+function replayUnacted(ctx: HarnessContext, lead: LeadConfig, log: HarnessContext["log"]): void {
+  for (const item of ctx.db.items.answeredUnacted(lead.id)) {
+    log.info(`replaying unhandled answer on ${item.id}`, { task: item.task_id, kind: item.kind, option: item.answer?.option });
+    const ev: Event = { id: 0, ts: item.answered_at ?? nowIso(), type: "item.answered", task_id: item.task_id, item_id: item.id, run_id: null, payload: { option: item.answer?.option, comment: item.answer?.comment, kind: item.kind, lead: item.lead, replayed: true } };
+    void handleAnswer(ctx, lead, ev).catch((err) => log.error(`replay of ${item.id} failed`, { error: err instanceof Error ? err.message : String(err) }));
+  }
+}
+
 export function startLeadLoop(ctx: HarnessContext, lead: LeadConfig): Loop {
   const log = ctx.log.child(`lead:${lead.id}`);
   let stopped = false;
+  let polls = 0;
 
   recoverOrphans(ctx, lead);
+  replayUnacted(ctx, lead, log);
 
   function poll(): void {
-    if (stopped || ctx.isPaused()) return;
+    if (stopped) return;
+    if (++polls % 8 === 0) replayUnacted(ctx, lead, log);
+    if (ctx.isPaused()) return;
     try {
       while (!stopped) {
         const busy = Math.max(ctx.db.tasks.runningByLead(lead.id), inFlightForLead(lead.id).length);
