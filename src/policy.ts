@@ -19,18 +19,24 @@ export function globToRegExp(glob: string): RegExp {
 }
 
 /** Does a single rule match this tool call? For Bash the pattern is matched against the command; for file tools against the path. */
+/** Claude Code's shell tools: Bash everywhere, PowerShell on Windows. Rules written for Bash apply to both. */
+export const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
+const isShell = (toolName: string) => SHELL_TOOLS.has(toolName);
+
 export function ruleMatches(rule: string, toolName: string, input: Record<string, unknown>): boolean {
   const { tool, pattern } = parseRule(rule);
-  if (tool !== toolName && !(tool === "Edit" && toolName === "MultiEdit")) return false;
+  const sameTool = tool === toolName || (tool === "Edit" && toolName === "MultiEdit") || (isShell(tool) && isShell(toolName));
+  if (!sameTool) return false;
   if (pattern == null) return true;
   const subject = subjectOf(toolName, input);
   if (subject == null) return false;
-  return globToRegExp(pattern).test(toolName === "Bash" ? subject.trim() : subject);
+  return globToRegExp(pattern).test(isShell(toolName) ? subject.trim() : subject);
 }
 
 export function subjectOf(toolName: string, input: Record<string, unknown>): string | null {
   switch (toolName) {
     case "Bash":
+    case "PowerShell":
       return typeof input.command === "string" ? input.command : null;
     case "Read":
     case "Edit":
@@ -113,7 +119,13 @@ const INLINE_CODE: Record<string, RegExp> = {
   fish: /.*/,
 };
 /** Commands that write to the paths they are given; their path arguments must stay inside the workspace. */
-const WRITING_COMMANDS = new Set(["tee", "cp", "mv", "sed", "touch", "mkdir", "chmod", "chown", "ln", "rsync", "install", "truncate", "dd", "rm", "rmdir", "unzip", "tar", "zip", "gzip", "gunzip", "patch", "git"]);
+const WRITING_COMMANDS = new Set([
+  "tee", "cp", "mv", "sed", "touch", "mkdir", "chmod", "chown", "ln", "rsync", "install", "truncate", "dd", "rm", "rmdir", "unzip", "tar", "zip", "gzip", "gunzip", "patch", "git",
+  // PowerShell cmdlets and aliases
+  "Set-Content", "Add-Content", "Out-File", "New-Item", "Copy-Item", "Move-Item", "Remove-Item", "Rename-Item", "Expand-Archive", "Compress-Archive", "ni", "cpi", "mi", "ri", "rni", "del", "rd", "md",
+]);
+/** PowerShell constructs that execute arbitrary code or reach outside the workspace. */
+const RISKY_POWERSHELL = [/\bInvoke-Expression\b/i, /(^|[\s;|(])iex\b/i, /\bInvoke-WebRequest\b/i, /\bInvoke-RestMethod\b/i, /(^|[\s;|(])(iwr|irm|curl|wget)\b/i, /\bStart-Process\b/i, /\bSet-ExecutionPolicy\b/i, /\bRemove-Item\b[^;|]*-Recurse/i, /\[System\.(Net|Diagnostics|Reflection)\./i, /\bNew-Object\s+(System\.)?Net\./i, /-EncodedCommand\b/i, /\bAdd-Type\b/i, /\bInvoke-Command\b/i, /\bEnter-PSSession\b/i, /\bInvoke-Item\b/i];
 /** The API token file must never be read by an agent. */
 const TOKEN_FILE_MARK = ".harness-token";
 
@@ -142,35 +154,36 @@ export function unwrapCommand(cmd: string): string {
  */
 export function evaluate(policy: PermissionPolicy, toolName: string, input: Record<string, unknown>, opts: { workdir?: string; extraAllowed?: string[] } = {}): PolicyVerdict {
   if (toolName.startsWith("mcp__harness__")) return { verdict: "allow" };
-  if (toolName === "Bash") {
+  if (isShell(toolName)) {
     // Compound commands: every segment must pass on its own, so `git status && rm -rf /` is judged by its worst part.
-    const segments = splitShell(subjectOf("Bash", input) ?? "").map((s) => s.trim()).filter(Boolean);
+    const segments = splitShell(subjectOf(toolName, input) ?? "").map((s) => s.trim()).filter(Boolean);
     if (segments.length > 1) {
       let worst: PolicyVerdict = { verdict: "allow" };
       for (const seg of segments) {
-        const v = evaluate(policy, "Bash", { ...input, command: seg }, opts);
+        const v = evaluate(policy, toolName, { ...input, command: seg }, opts);
         if (v.verdict === "deny") return v;
         if (v.verdict === "ask") worst = v;
       }
       return worst;
     }
   }
-  if (toolName === "Bash") {
-    const raw = subjectOf("Bash", input) ?? "";
+  if (isShell(toolName)) {
+    const raw = subjectOf(toolName, input) ?? "";
     if (raw.includes(TOKEN_FILE_MARK)) return { verdict: "deny", reason: "the harness token file is off limits" };
     for (const re of RISKY_SHELL) if (re.test(raw)) return { verdict: "ask", reason: "command uses shell constructs that need a human look" };
+    if (toolName === "PowerShell" && RISKY_POWERSHELL.some((re) => re.test(raw))) return { verdict: "ask", reason: "PowerShell construct that needs a human look" };
     const unwrapped = unwrapCommand(raw);
     if (unwrapped && unwrapped !== raw.trim()) {
       // `env X=1 git push`, `timeout 30 rm -rf /`: judge the wrapped command on its own.
-      return evaluate(policy, "Bash", { ...input, command: unwrapped }, opts);
+      return evaluate(policy, toolName, { ...input, command: unwrapped }, opts);
     }
   }
 
   for (const r of policy.deny) if (ruleMatches(r, toolName, input)) return { verdict: "deny", reason: `blocked by policy rule ${r}` };
   for (const r of policy.ask) if (ruleMatches(r, toolName, input)) return { verdict: "ask", reason: `policy rule ${r} requires approval` };
 
-  if (toolName === "Bash") {
-    const cmd = (subjectOf("Bash", input) ?? "").trim();
+  if (isShell(toolName)) {
+    const cmd = (subjectOf(toolName, input) ?? "").trim();
     const head = cmd.split(/\s+/)[0] ?? "";
     const inline = INLINE_CODE[head];
     if (inline && inline.test(cmd)) return { verdict: "ask", reason: `inline code passed to ${head} needs a human look` };

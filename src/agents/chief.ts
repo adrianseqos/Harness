@@ -16,6 +16,9 @@ const SETTING_LAST_HEALTH = "last_health_at";
 const SETTING_LAST_BRIEF = "last_brief_date";
 const SETTING_LAST_ERROR_ITEM = "last_chief_error_item_at";
 
+/** Set when a subtask of an umbrella finishes, so the chief revisits the umbrella on its next cycle instead of waiting for the hourly round. */
+let umbrellaCheckPending = false;
+
 export interface PendingAnswer {
   task: Task;
   item: QueueItem;
@@ -68,6 +71,12 @@ export function startChiefLoop(ctx: HarnessContext): Loop {
 
   const offCreated = ctx.bus.on("task.created", wake);
   const offAnswered = ctx.bus.on("item.answered", wake);
+  const offDone = ctx.bus.on("task.done", (ev) => {
+    const task = ev.task_id ? ctx.db.tasks.get(ev.task_id) : null;
+    if (!task?.parent_id) return;
+    umbrellaCheckPending = true;
+    wake();
+  });
   schedule(WAKE_DEBOUNCE_MS);
   log.info(`chief loop started (every ${ctx.config.chief.intervalSec}s)`);
 
@@ -81,6 +90,7 @@ export function startChiefLoop(ctx: HarnessContext): Loop {
       wakeTimer = null;
       offCreated();
       offAnswered();
+      offDone();
       if (current) await current;
       log.info("chief loop stopped");
     },
@@ -97,7 +107,10 @@ async function runCycle(ctx: HarnessContext, log: HarnessContext["log"]): Promis
   if (inbox > 0 || returned.length > 0) await runChiefTriage(ctx);
 
   if (ctx.isPaused()) return;
-  if (isDue(ctx.db.settings.get(SETTING_LAST_HEALTH), HEALTH_INTERVAL_MS)) await runChiefHealth(ctx);
+  if (umbrellaCheckPending || isDue(ctx.db.settings.get(SETTING_LAST_HEALTH), HEALTH_INTERVAL_MS)) {
+    umbrellaCheckPending = false;
+    await runChiefHealth(ctx);
+  }
 
   if (ctx.isPaused()) return;
   if (briefIsDue(ctx)) await runDailyBrief(ctx);

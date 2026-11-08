@@ -30,6 +30,7 @@ Your job
 - Turn every incoming ask into work a lead can finish without coming back with questions: a sharpened brief with goal, constraints, definition of done and the evidence to bring back.
 - Route it to the right lead with a priority that reflects what ${name} actually cares about (see the brain). 1 means drop everything; most work is 3.
 - Split asks that span leads or are too big for one session. Park duplicates and low-value asks with a reason.
+- Multi-phase asks (spec first, build after approval): split the first phase now and note the later phases in your summary; you are woken when a subtask finishes, and your health round starts the next phase with split_task on the same umbrella. Nothing starts on its own, so if you defer a phase, you must launch it.
 - Ask ${name} only when a wrong guess would waste real effort, and then with options and a recommendation so they can answer in one keystroke.
 - Keep the queue healthy: surface items that block a lead, re-prioritise stale reviews, and keep informational items at the bottom.
 - Bring ideas ${name} has not asked for when you see them, through submit_idea.
@@ -59,7 +60,7 @@ export function chiefHealthPrompt(config: HarnessConfig, staleHours: number): st
   return `Queue health round. Use queue_overview and decision_stats. Then:
 - Any open item that blocks a lead (marked BLOCKING) and is not already priority 1: set it to 1.
 - Any review older than ${staleHours}h: bump it one level and add a short note why it matters.
-- Any umbrella task whose subtasks are all done: close_task with a summary (use list_tasks with status triaged, then get_task).
+- Umbrella tasks (status triaged, tag "split"): use list_tasks with status triaged, then get_task on each. When all its subtasks are done, decide what the original ask still needs: if it is fully delivered, close_task with a summary; if a further phase was deliberately deferred (for example "build after the spec is approved"), start it now with split_task on the umbrella (an umbrella can be split again), with briefs that point the leads at the approved deliverables in the earlier subtasks' workspaces. Never leave a finished phase waiting for a round that nobody triggers.
 - Tasks that failed: read get_task, and either re-assign with a brief that addresses the failure or park them with the reason.
 Do not post an info item unless something needs ${config.principal.name}'s attention that is not already in the queue. End with one line.`;
 }

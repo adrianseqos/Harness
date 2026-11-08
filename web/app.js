@@ -589,8 +589,10 @@ function describePermission(meta) {
   return parts.join("\n");
 }
 
-function statusPill(status) {
-  return el("span", { class: `status-pill status-${status}`, text: String(status || "").replace("_", " ") });
+function statusPill(status, task) {
+  // A split task stays in "triaged" as the umbrella for its subtasks; call it what it is.
+  const label = status === "triaged" && task && Array.isArray(task.tags) && task.tags.includes("split") ? "umbrella" : String(status || "").replace("_", " ");
+  return el("span", { class: `status-pill status-${status}`, text: label });
 }
 
 function runRow(run) {
@@ -977,13 +979,13 @@ function taskCard(t) {
       el("span", { text: ago(t.updated_at), title: dateTimeOf(t.updated_at) }),
       Number(t.cost_usd) > 0 ? el("span", { text: money(t.cost_usd) }) : null,
       t.open_items ? el("span", { class: "blocking", text: `${t.open_items} waiting` }) : null,
-      col6Status(t.status),
+      col6Status(t.status, t),
     ]),
   ]);
 }
 
-function col6Status(status) {
-  return ["done", "rejected", "failed", "parked", "triaged"].includes(status) ? statusPill(status) : null;
+function col6Status(status, task) {
+  return ["done", "rejected", "failed", "parked", "triaged"].includes(status) ? statusPill(status, task) : null;
 }
 
 async function openTaskDrawer(id) {
@@ -1014,7 +1016,7 @@ function renderTaskDrawer({ task, runs = [], items = [], children = [], events =
 
   body.append(
     el("dl", { class: "kv" }, [
-      el("dt", { text: "Status" }), el("dd", {}, [statusPill(task.status)]),
+      el("dt", { text: "Status" }), el("dd", {}, [statusPill(task.status, task)]),
       el("dt", { text: "Lead" }), el("dd", {}, [editable ? leadEditor(task) : el("span", { text: task.lead ? leadName(task.lead) : "unassigned" })]),
       el("dt", { text: "Priority" }), el("dd", {}, [editable ? priorityEditor(task) : el("span", { class: `prio prio-${clampPrio(task.priority)}`, text: `P${clampPrio(task.priority)}` })]),
       el("dt", { text: "Source" }), el("dd", { text: task.source }),

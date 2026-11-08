@@ -83,10 +83,15 @@ export const DEFAULT_PERMISSIONS: PermissionPolicy = {
     "Bash(python*)", "Bash(python3*)", "Bash(pytest*)", "Bash(pip*)", "Bash(uv*)", "Bash(poetry*)",
     "Bash(cargo*)", "Bash(go *)", "Bash(make*)", "Bash(gradle*)", "Bash(mvn*)", "Bash(dotnet*)",
     "Bash(prettier*)", "Bash(eslint*)", "Bash(ruff*)", "Bash(black*)",
+    // PowerShell (Windows): read-only and workspace-local cmdlets; the writing ones are still checked for paths outside the workspace
+    "Bash(Get-ChildItem*)", "Bash(Get-Content*)", "Bash(Get-Item*)", "Bash(Get-Location*)", "Bash(Get-Date*)", "Bash(Get-Command*)", "Bash(Select-String*)", "Bash(Select-Object*)", "Bash(Test-Path*)", "Bash(Measure-Object*)", "Bash(Write-Output*)", "Bash(Write-Host*)", "Bash(Resolve-Path*)", "Bash(Split-Path*)", "Bash(Join-Path*)", "Bash(Sort-Object*)", "Bash(Where-Object*)", "Bash(ForEach-Object*)", "Bash(Format-Table*)", "Bash(Format-List*)", "Bash(Out-String*)", "Bash(ConvertTo-Json*)", "Bash(ConvertFrom-Json*)", "Bash(Compare-Object*)",
+    "Bash(Set-Content*)", "Bash(Add-Content*)", "Bash(Out-File*)", "Bash(New-Item*)", "Bash(Copy-Item*)", "Bash(Move-Item*)", "Bash(Rename-Item*)", "Bash(Set-Location*)", "Bash(Push-Location*)", "Bash(Pop-Location*)", "Bash(Expand-Archive*)", "Bash(Compress-Archive*)",
+    "Bash(gci*)", "Bash(gc *)", "Bash(sls *)", "Bash(ni *)", "Bash(cpi *)", "Bash(mi *)", "Bash(md *)", "Bash(dir*)", "Bash(type *)", "Bash(sl *)", "Bash(cmd /c dir*)", "Bash(cmd /c type*)", "Bash(where*)",
   ],
   ask: [
     "Bash(git push*)", "Bash(git merge*)", "Bash(git rebase*)", "Bash(git reset --hard*)", "Bash(git clean*)", "Bash(git branch -D*)", "Bash(git branch -d*)", "Bash(git branch -f*)", "Bash(git branch -m*)", "Bash(git branch -M*)", "Bash(git tag -d*)", "Bash(git checkout -b*)", "Bash(git switch*)", "Bash(git worktree add*)", "Bash(git worktree remove*)", "Bash(git config*)",
     "Bash(env*)", "Bash(printenv*)", "Bash(xargs*)", "Bash(sh *)", "Bash(bash *)", "Bash(zsh *)",
+    "Bash(Remove-Item*)", "Bash(ri *)", "Bash(del *)", "Bash(rd *)", "Bash(rmdir*)", "Bash(Invoke-WebRequest*)", "Bash(Invoke-RestMethod*)", "Bash(iwr *)", "Bash(irm *)", "Bash(Start-Process*)", "Bash(powershell*)", "Bash(pwsh*)", "Bash(cmd *)", "Bash(Get-ChildItem Env:*)", "Bash(gci env:*)", "Bash(dir env:*)",
     "Bash(gh pr*)", "Bash(gh release*)",
     "Bash(rm -r*)", "Bash(rm -f*)", "Bash(rm -rf*)",
     "Bash(curl*)", "Bash(wget*)", "Bash(ssh*)", "Bash(scp*)", "Bash(docker*)", "Bash(kubectl*)", "Bash(terraform*)",
